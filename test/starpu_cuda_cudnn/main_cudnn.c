@@ -50,6 +50,7 @@ int main(void)
 
   float in_data[INSZ];
   for(int i=0; i<INSZ; i++) {
+    in_data[i] = i;
   }
 
   float filter_data[FILTSZ];

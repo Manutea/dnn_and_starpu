@@ -40,7 +40,7 @@ extern "C" void init_conv_cudnn_func(void *buffers[], void *_args)
   //Convoluion
   cudnnConvolutionDescriptor_t conv_desc;
   cudnnCreateConvolutionDescriptor(&conv_desc);
-  cudnnSetConvolution2dDescriptor(conv_desc, prms->pad_h, prms->pad_w, prms->str_h, prms->str_w, 
+  cudnnSetConvolution2dDescriptor(conv_desc, prms->pad_h, prms->pad_w, prms->str_h, prms->str_w,
   prms->dil_h, prms->dil_w, CUDNN_CONVOLUTION, CUDNN_DATA_FLOAT);
 
   //Setup the output tensor and allocate the proper amount of memory prior to launch the actual convolution
@@ -82,13 +82,9 @@ extern "C" void init_conv_cudnn_func(void *buffers[], void *_args)
   //print(out_data, out_n, out_c, out_h, out_w);
 
   // finalizing
-  //cudaFree(ws_data);
-  //cudaFree(out_data);
   //cudnnDestroyTensorDescriptor(out_desc);
   //cudnnDestroyConvolutionDescriptor(conv_desc);
-  //cudaFree(filt_data);
   //cudnnDestroyFilterDescriptor(filt_desc);
-  //cudaFree(in_data);
   //cudnnDestroyTensorDescriptor(in_desc);
   //cudnnDestroy(cudnn);
 }
