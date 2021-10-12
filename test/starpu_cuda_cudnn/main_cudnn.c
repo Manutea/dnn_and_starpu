@@ -1,87 +1,124 @@
 #include <starpu.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
+
+#define INSZ  25
+#define FILTSZ  4
 
 #define FPRINTF(ofile, fmt, ...) do { if (!getenv("STARPU_SSILENT")) {fprintf(ofile, fmt, ## __VA_ARGS__); }} while(0)
 
-extern void dev_const(void *descr[], void *_args);
-extern void dev_iota(void *descr[], void *_args);
+extern void init_conv_cudnn_func(void *buffers[], void *_args);
 
-typedef void (*device_func)(void **, void *);
-
-int execute_on(uint32_t where, device_func func, float *matrix_data, int pnx, int pny)
+static struct starpu_perfmodel vector_scal_model =
 {
-  struct starpu_codelet cl;
-  starpu_data_handle_t matrix_data_handle;
+  .type = STARPU_HISTORY_BASED,
+  .symbol = "vector_scal"
+};
 
-  starpu_matrix_data_register(&matrix_data_handle, STARPU_MAIN_RAM, (uintptr_t)matrix_data, pnx, pnx, pny, sizeof(float));
+static struct starpu_codelet cl =
+{
+  .cuda_funcs = {init_conv_cudnn_func},
+  .cuda_flags = {STARPU_CUDA_ASYNC},
+  .nbuffers = 3,
+  .modes = {STARPU_R, STARPU_R, STARPU_RW},
+  .model = &vector_scal_model,
+};
 
-  starpu_codelet_init(&cl);
-  cl.where = where;
-  cl.cuda_funcs[0] = func;
-  cl.nbuffers = 1;
-  cl.modes[0] = STARPU_RW,
-  cl.model = NULL;
-  cl.name = "dev";
-
-  struct starpu_task *task = starpu_task_create();
-  task->cl = &cl;
-  task->callback_func = NULL;
-  task->handles[0] = matrix_data_handle;
-
-  int ret = starpu_task_submit(task);
-  if (STARPU_UNLIKELY(ret == -ENODEV))
-  {
-    FPRINTF(stderr, "No worker may execute this task\n");
-    task->destroy = 0;
-    starpu_task_destroy(task);
-    return 1;
-  }
-
-  starpu_task_wait_for_all();
-  starpu_data_unregister(matrix_data_handle);
-
-  for(int i=0; i<pnx*pny; i++)
-  {
-    FPRINTF(stderr, "%f ", matrix_data[i]);
-  }
-  FPRINTF(stderr, "\n\n");
-
-
-  return 0;
-}
-
+struct cudnn_convolution_params
+{
+  // input
+  int in_n, in_c, in_h, in_w;
+  // filter
+  int filt_k, filt_c, filt_h, filt_w;
+  // convolution
+  int pad_h, pad_w, str_h, str_w, dil_h, dil_w;
+  // out
+  int out_n, out_c, out_h, out_w;
+  // workspace size
+  size_t ws_size;
+};
 
 int main(void)
-{
-  const int filt_k = 1, filt_c = 1, filt_h = 2, filt_w = 2;
-  const int in_n = 1, in_c = 1, in_h = 5, in_w = 5;
+{                                                 
+  struct cudnn_convolution_params conv_params = {1, 1, 5, 5,       // input
+                                                 1, 1, 2, 2,       // filter
+                                                 1, 1, 1, 1, 1, 1, // convolution
+                                                 0, 0, 0, 0,       // out
+                                                 0};               // workspace size
+  int out_n, out_c, out_h, out_w;
 
-  float *filt_data, *in_data;
-  int ret;
+  float in_data[INSZ];
+  for(int i=0; i<INSZ; i++) {
+  }
 
-  int cosnt_nx=filt_w * filt_h;
-  int const_ny=filt_k * filt_c;
+  float filter_data[FILTSZ];
+  for(int i=0; i<FILTSZ; i++) {
+    filter_data[i] = 1.0f;
+  }
 
-  int iota_nx = in_w * in_h;
-  int iota_ny = in_n * in_c;
+  float out_data[1*1*6*6];
 
-  //Init StarPu
-  ret = starpu_init(NULL);
+  int ret = starpu_init(NULL);
   if (ret == -ENODEV)
+  {
     return 77;
-  STARPU_CHECK_RETURN_VALUE(ret, "starpu_init");
+  }
 
-  filt_data = (float*)malloc(cosnt_nx*const_ny*sizeof(float));
-  assert(filt_data);
-  execute_on(STARPU_CUDA, dev_const, filt_data, cosnt_nx, const_ny);
+  //starpu data register
+  starpu_data_handle_t in_data_handle;
+  starpu_memory_pin(in_data, sizeof(in_data));
+  starpu_vector_data_register(&in_data_handle, STARPU_MAIN_RAM, (uintptr_t)in_data, INSZ, sizeof(in_data[0]));
 
-  in_data = (float*)malloc(iota_nx * iota_ny * sizeof(float));
-  assert(in_data);
-  execute_on(STARPU_CUDA, dev_iota, in_data, iota_nx, iota_ny);
+  starpu_data_handle_t filter_handle;
+  starpu_memory_pin(filter_data, sizeof(filter_data));
+  starpu_vector_data_register(&filter_handle, STARPU_MAIN_RAM, (uintptr_t)filter_data, FILTSZ, sizeof(filter_data[0]));
 
-  free(in_data);
-  free(filt_data);
+  starpu_data_handle_t out_data_handle;
+  starpu_memory_pin(out_data, sizeof(out_data));
+  starpu_vector_data_register(&out_data_handle, STARPU_MAIN_RAM, (uintptr_t)out_data, 1*1*6*6, sizeof(out_data[0]));
+
+  //
+  struct starpu_task *task = starpu_task_create();
+  task->synchronous = 1;
+  task->cl = &cl;
+  task->handles[0] = in_data_handle;
+  task->handles[1] = filter_handle;
+  task->handles[2] = out_data_handle;
+  task->cl_arg = &conv_params;
+  task->cl_arg_size = sizeof(conv_params);
+
+  ret = starpu_task_submit(task);
+  STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
+
+  //
+  starpu_data_unregister(in_data_handle);
+  starpu_data_unregister(filter_handle);
+  starpu_data_unregister(out_data_handle);
+
+  starpu_memory_unpin(in_data, sizeof(in_data));
+  starpu_memory_unpin(filter_data, sizeof(filter_data));
+  starpu_memory_unpin(out_data, sizeof(out_data));
+
   starpu_shutdown();
+
+  printf("\n");
+  printf("out_n : %d\n", conv_params.out_n);
+  printf("out_c : %d\n", conv_params.out_c);
+  printf("out_h : %d\n", conv_params.out_h);
+  printf("out_w : %d\n", conv_params.out_w);
+  printf("\n");
+
+  printf("\n");
+  for(int i=0; i<1*1*6*6; i++) 
+  {
+    printf("%f \n", out_data[i]);
+  }
 
   return 0;
 }
+
+
+
+  // starpu_cuda_get_local_stream(), cudaStreamSynchronize(starpu_cuda_get_local_stream());
+  // multiformat data register ?

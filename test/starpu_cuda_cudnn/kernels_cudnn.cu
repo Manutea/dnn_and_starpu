@@ -1,40 +1,94 @@
 #include <starpu.h>
+#include "cudnn.h"
 
-static __global__ void cuda_dev_const(float *px, float k)
+struct cudnn_convolution_params
 {
-        int tid = threadIdx.x + blockIdx.x * blockDim.x;
-        px[tid] = k;
-}
+  // input
+  int in_n, in_c, in_h, in_w;
+  // filter
+  int filt_k, filt_c, filt_h, filt_w;
+  // convolution
+  int pad_h, pad_w, str_h, str_w, dil_h, dil_w;
+  // out
+  int out_n, out_c, out_h, out_w;
+  // workspace size
+  size_t ws_size;
+};
 
-static __global__ void cuda_dev_iota(float *px)
+extern "C" void init_conv_cudnn_func(void *buffers[], void *_args)
 {
-        int tid = threadIdx.x + blockIdx.x * blockDim.x;
-        px[tid] = tid;
-}
+  //Tensor In, Filter, Convolution params
+  cudnn_convolution_params *prms = (cudnn_convolution_params *)_args;
 
-extern "C" void dev_const(void *descr[], void *_args)
-{
-        float *filt_data = (float *)STARPU_MATRIX_GET_PTR(descr[0]);
+  float *in_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
+  float *filt_data  = (float *)STARPU_VECTOR_GET_PTR(buffers[1]);
+  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[2]);
 
-        int filt_size = STARPU_MATRIX_GET_NX(descr[0]);
-        int filt_nb = STARPU_MATRIX_GET_NY(descr[0]);
+  cudnnHandle_t cudnn;
+  cudnnCreate(&cudnn);
 
-        cuda_dev_const<<<filt_size, filt_nb, 0, starpu_cuda_get_local_stream()>>>(filt_data, 1.f);
+  //Tensor in
+  cudnnTensorDescriptor_t in_desc;
+  cudnnCreateTensorDescriptor(&in_desc);
+  cudnnSetTensor4dDescriptor(in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, prms->in_n, prms->in_c, prms->in_h, prms->in_w);
 
-        cudaError_t status = cudaGetLastError();
-        if (status != cudaSuccess) STARPU_CUDA_REPORT_ERROR(status);
-        cudaStreamSynchronize(starpu_cuda_get_local_stream());
-}
+  //Filter
+  cudnnFilterDescriptor_t filt_desc;
+  cudnnCreateFilterDescriptor(&filt_desc);
+  cudnnSetFilter4dDescriptor(filt_desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, prms->filt_k, prms->filt_c, prms->filt_h, prms->filt_w);
 
-extern "C" void dev_iota(void *descr[], void *_args)
-{
-        float *in_data = (float *)STARPU_MATRIX_GET_PTR(descr[0]);
-        int in_size = STARPU_MATRIX_GET_NX(descr[0]);
-        int in_nb = STARPU_MATRIX_GET_NY(descr[0]);
- 
-        cuda_dev_iota<<<in_size, in_nb, 0, starpu_cuda_get_local_stream()>>>(in_data);
+  //Convoluion
+  cudnnConvolutionDescriptor_t conv_desc;
+  cudnnCreateConvolutionDescriptor(&conv_desc);
+  cudnnSetConvolution2dDescriptor(conv_desc, prms->pad_h, prms->pad_w, prms->str_h, prms->str_w, 
+  prms->dil_h, prms->dil_w, CUDNN_CONVOLUTION, CUDNN_DATA_FLOAT);
 
-        cudaError_t status = cudaGetLastError();
-        if (status != cudaSuccess) STARPU_CUDA_REPORT_ERROR(status);
-        cudaStreamSynchronize(starpu_cuda_get_local_stream());
+  //Setup the output tensor and allocate the proper amount of memory prior to launch the actual convolution
+  int out_n, out_c, out_h, out_w;
+  cudnnGetConvolution2dForwardOutputDim(conv_desc, in_desc, filt_desc, &prms->out_n, &prms->out_c, &prms->out_h, &prms->out_w);
+
+  //Tensor out
+  cudnnTensorDescriptor_t out_desc;
+  cudnnCreateTensorDescriptor(&out_desc);
+  cudnnSetTensor4dDescriptor(out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, prms->out_n, prms->out_c, prms->out_h, prms->out_w);
+  
+  //This function attempts all algorithms available for cudnnConvolutionForward().
+  int n_returnedAlgo;  
+  const int n_requestedAlgo = 10;
+  cudnnConvolutionFwdAlgoPerf_t fwd_algo_perf[n_requestedAlgo];
+  cudnnFindConvolutionForwardAlgorithm(cudnn, in_desc, filt_desc, conv_desc, out_desc, n_requestedAlgo, &n_returnedAlgo, fwd_algo_perf);
+
+  //This function returns the amount of GPU memory workspace the user needs to allocate to be able to call cudnnConvolutionForward() with the specified algorithm.
+  cudnnConvolutionFwdAlgo_t fwd_algo = fwd_algo_perf[0].algo;
+  cudnnGetConvolutionForwardWorkspaceSize(cudnn, in_desc, filt_desc, conv_desc, out_desc, fwd_algo, &prms->ws_size);
+
+  //float *ws_data;
+  //cudaMalloc(&ws_data, prms_in->ws_size);
+
+  // perform
+  float alpha = 1.f;
+  float beta  = 0.f;
+
+  cudnnConvolutionForward(cudnn, &alpha, in_desc, in_data, filt_desc, filt_data, conv_desc, fwd_algo, NULL/*ws_data*/, prms->ws_size, &beta, out_desc, out_data);
+
+  // results  
+  //std::cout << "in_data:" << std::endl;
+  //print(in_data, in_n, in_c, in_h, in_w);
+  //
+  //std::cout << "filt_data:" << std::endl;
+  //print(filt_data, filt_k, filt_c, filt_h, filt_w);
+  //
+  //std::cout << "out_data:" << std::endl;
+  //print(out_data, out_n, out_c, out_h, out_w);
+
+  // finalizing
+  //cudaFree(ws_data);
+  //cudaFree(out_data);
+  //cudnnDestroyTensorDescriptor(out_desc);
+  //cudnnDestroyConvolutionDescriptor(conv_desc);
+  //cudaFree(filt_data);
+  //cudnnDestroyFilterDescriptor(filt_desc);
+  //cudaFree(in_data);
+  //cudnnDestroyTensorDescriptor(in_desc);
+  //cudnnDestroy(cudnn);
 }
