@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+//#include "cudnn.h"
 
 #define INSZ  25
 #define FILTSZ  4
@@ -21,7 +22,7 @@ static struct starpu_codelet cl =
   .cuda_funcs = {init_conv_cudnn_func},
   .cuda_flags = {STARPU_CUDA_ASYNC},
   .nbuffers = 3,
-  .modes = {STARPU_R, STARPU_R, STARPU_RW},
+  .modes = {STARPU_R, STARPU_R, STARPU_W},
   .model = &vector_scal_model,
 };
 
@@ -40,7 +41,11 @@ struct cudnn_convolution_params
 };
 
 int main(void)
-{                                                 
+{
+  //cudnnHandle_t cudnn;
+  //cudnnCreate(&cudnn);
+  //cudnnDestroy(cudnn);                                    
+
   struct cudnn_convolution_params conv_params = {1, 1, 5, 5,       // input
                                                  1, 1, 2, 2,       // filter
                                                  1, 1, 1, 1, 1, 1, // convolution
