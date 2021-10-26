@@ -151,8 +151,6 @@ float *out_to_in(starpu_data_handle_t * out_h, struct convolution_params *prms)
 
 float *init_conv(float *in, starpu_data_handle_t *in_h, float *filt, starpu_data_handle_t *filt_h, starpu_data_handle_t *out_h, struct convolution_params *prms)
 {
-  prms->iBufferIn = 0;
-
   //Tensor in
   cudnnCreateTensorDescriptor(&prms->in_desc);
   cudnnSetTensor4dDescriptor(prms->in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, prms->in_n, prms->in_c, prms->in_h, prms->in_w);
