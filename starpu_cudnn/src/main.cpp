@@ -29,7 +29,6 @@ struct convolution_params
 void init_cudnn(void *);
 void conv(void **, void *);
 void free_conv(const struct convolution_params *);
-float *out_to_in(starpu_data_handle_t *, struct convolution_params *);
 void submit_conv(const starpu_data_handle_t, const starpu_data_handle_t, const starpu_data_handle_t, struct convolution_params *);
 float *init_conv(float *, starpu_data_handle_t *, float *, starpu_data_handle_t *, starpu_data_handle_t *, struct convolution_params *);
 
@@ -88,9 +87,6 @@ int main(void)
   float *out_data = init_conv(in_data, &in_data_handle, filt_data, &filt_data_handle, &out_data_handle, &conv_params);
   submit_conv(in_data_handle, filt_data_handle, out_data_handle, &conv_params);
 
-  //out_to_in(&out_data_handle, &conv_params);
-  //submit_conv(in_data_handle, filt_data_handle, out_data_handle, &conv_params);
-
   starpu_data_unregister(in_data_handle);
   starpu_data_unregister(filt_data_handle);
   starpu_data_unregister(out_data_handle);
@@ -126,27 +122,6 @@ void init_cudnn(void *arg)
   const int id = starpu_worker_get_id();
   cudnnCreate(cudnn[id]);
   cudnnSetStream(cudnn[id], starpu_cuda_get_local_stream());
-}
-
-float *out_to_in(starpu_data_handle_t * out_h, struct convolution_params *prms)
-{
-  prms->in_size = prms->out_size;
-  prms->in_n = prms->out_n;
-  prms->in_c = prms->out_c;
-  prms->in_h = prms->out_h;
-  prms->in_w = prms->out_w;
-  prms->in_desc = &prms->out_desc;
-
-  cudnnGetConvolution2dForwardOutputDim(prms->conv_desc, prms->in_desc, prms->filt_desc, &prms->out_n, &prms->out_c, &prms->out_h, &prms->out_w);
-  prms->out_size = prms->out_n * prms->out_c * prms->out_h * prms->out_w;
-  float *out = (float *) malloc(prms->out_size * sizeof(float));
-
-  cudnnSetTensor4dDescriptor(prms->out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, prms->out_n, prms->out_c, prms->out_h, prms->out_w);
-
-  starpu_memory_pin(out, sizeof(out[0]) * prms->out_size);
-  starpu_vector_data_register(out_h, STARPU_MAIN_RAM, (uintptr_t)out, prms->out_size, sizeof(out[0]));
-
-  return out;
 }
 
 float *init_conv(float *in, starpu_data_handle_t *in_h, float *filt, starpu_data_handle_t *filt_h, starpu_data_handle_t *out_h, struct convolution_params *prms)
