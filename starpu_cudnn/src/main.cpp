@@ -9,10 +9,9 @@
 
 #define REQUESTED_ALGO 10
 
-const int repeat = 100;
 double sumCudaTime = 0.0;
 double sumDelayTime = 0.0;
-double sumLenghtTime = 0.0;
+double sumLengthTime = 0.0;
 double sumCudnnTime = 0.0;
 
 cudnnHandle_t cudnn[STARPU_NMAXWORKERS];
@@ -30,8 +29,8 @@ void init_cudnn(void *);
 void conv(void **, void *);
 void free_conv(const struct convolution_params *);
 starpu_data_handle_t init_filter(const float *, const int, const int, const int, const int, const struct convolution_params *);
-float *submit_conv(const float *, const int, const int, const int, const int, const int, const int, const int, 
-                  const int, const int, const int, starpu_data_handle_t, struct convolution_params *);
+starpu_data_handle_t submit_conv(const float *, const int, const int, const int, const int, const int, const int, const int, 
+                  const int, const int, const int, starpu_data_handle_t, struct convolution_params *, struct starpu_task *);
 
 static struct starpu_perfmodel conv_model =
 {
@@ -48,34 +47,39 @@ static struct starpu_codelet conv_cl =
   .model = &conv_model,
 };
 
-int main(void)
+int main(int argc, char **argv)
 {
+  const int repeat = atoi(argv[1]);
+  const int in_h = atoi(argv[2]);
+  const int in_w = atoi(argv[3]);
+
+  const int in_n = 1, in_c = 1;
+  const int filt_k = 1, filt_c = 1, filt_h = 2, filt_w = 2;
+  const int pad_h = 1, pad_w = 1, str_h = 1, str_w = 1, dil_h = 1, dil_w = 1;
+  struct convolution_params conv_params = {0, 1.0, 0.0}; 
+
+  const int in_size = in_n * in_c * in_h * in_w;                    
+  float in_data[in_size];
+  for(int i=0; i<in_size; i++) 
+  {
+    in_data[i] = i;
+  }
+
+  const int filt_size = filt_k * filt_c * filt_h * filt_w;  
+  float filt_data[filt_size];
+  for(int i=0; i<filt_size; i++) 
+  {
+    filt_data[i] = 1.0f;
+  }
+
   for(int i=0; i<repeat; i++)
   {
-    const int in_n = 1, in_c = 1, in_h = 720, in_w = 480;
-    const int filt_k = 1, filt_c = 1, filt_h = 5, filt_w = 5;
-    const int pad_h = 1, pad_w = 1, str_h = 1, str_w = 1, dil_h = 1, dil_w = 1;
-    struct convolution_params conv_params = {
-                                                   0,      // workspace/in/filter/out size
-                                                   1.0, 0.0};        //scaling factors        
-
-    const int in_size = in_n * in_c * in_h * in_w;                    
-    float in_data[in_size];
-    for(int i=0; i<in_size; i++) {
-      in_data[i] = i;
-    }
-
-    const int filt_size = filt_k * filt_c * filt_h * filt_w;  
-    float filt_data[filt_size];
-    for(int i=0; i<filt_size; i++) {
-      filt_data[i] = 1.0f;
-    }
-
+    printf("\n--- hello ---\n");
     const int ret = starpu_init(NULL);
     if (ret == -ENODEV)
-  {
-    return 77;
-  }
+    {
+      return 77;
+    }
 
 	  /* Enable profiling */
 	  starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
@@ -85,38 +89,38 @@ int main(void)
     starpu_worker_get_ids_by_type(STARPU_CUDA_WORKER, gpuprocs, ngpus);
     starpu_execute_on_each_worker(init_cudnn, cudnn, STARPU_CUDA);
 
-    starpu_data_handle_t filt_data_handle = init_filter(filt_data, filt_k, filt_c, filt_h, filt_w, &conv_params);
+    struct starpu_task *task;
+    starpu_data_handle_t filt_handle = init_filter(filt_data, filt_k, filt_c, filt_h, filt_w, &conv_params);
+    starpu_data_handle_t out_handle = submit_conv(in_data, in_n, in_c, in_h, in_w, pad_h, pad_w, str_h, str_w, dil_h, dil_w, filt_handle, &conv_params, task);
 
-    const float *out_data = submit_conv(in_data, in_n, in_c, in_h, in_w, pad_h, pad_w, str_h, str_w, dil_h, dil_w, filt_data_handle, &conv_params);
-    const float *out_data2 = submit_conv(out_data, in_n, in_c, in_h, in_w, pad_h, pad_w, str_h, str_w, dil_h, dil_w, filt_data_handle, &conv_params);
-    starpu_data_unregister_submit(out_data);
+    //starpu_data_unregister_submit(out_handle);
 
-    //aquire sur le handle
-    //starpu_data_aquire(out_handle, STARPU_R);
-    //float *out= starpu_data_get_local_ptr(out_handle);
-    // --------------- RESULT -------------
-    //for(int i=0; i<conv_params.out_size; i++) 
-    //{
-    //  printf("%f \n", out_data[i]);
-    //}
-    //starpu_data_release(out_handle)
+    //-------
+    starpu_data_acquire(out_handle, STARPU_R);
+    float *out= starpu_data_get_local_ptr(out_handle);
+    for(int i=0; i<conv_params.out_size; i++) 
+    {
+      printf("%f \n", out[i]);
+    }
+    starpu_data_release(out_handle);
+    //-------
 
-    starpu_data_unregister(filt_data_handle);
+    starpu_data_unregister(out_handle);
+    starpu_data_unregister(filt_handle);
+
     starpu_memory_unpin(in_data, sizeof(in_data[0])*in_size);
     starpu_memory_unpin(filt_data, sizeof(filt_data[0])*filt_size);
-    starpu_memory_unpin(out_data, sizeof(out_data[0])*conv_params.out_size);
 
     free_conv(&conv_params);
 
     starpu_shutdown();
-    free(out_data);
   }
 
   printf("\n");
   printf("CUDA : %lf\n", sumCudaTime/(double)repeat);
   printf("CUDNN : %lf\n", sumCudnnTime/(double)repeat);
   printf("Delay : %lf\n", sumDelayTime/(double)repeat);
-  printf("Length : %lf\n", sumLenghtTime/(double)repeat);
+  printf("Length : %lf\n", sumLengthTime/(double)repeat);
 
   return 0;
 }
@@ -163,9 +167,8 @@ void conv(void *buffers[], void *_args)
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
-  cudaEventRecord(start, 0); //donner le stream
+  cudaEventRecord(start, starpu_cuda_get_local_stream());
 
-  starpu_timing_now();
   if(ws_size > 0)
   {
     float *ws_data;
@@ -181,7 +184,7 @@ void conv(void *buffers[], void *_args)
                            fwd_algo, NULL, ws_size, &prms->beta, out_desc, out_data);
   }
 
-  cudaEventRecord(stop, 0);
+  cudaEventRecord(stop, starpu_cuda_get_local_stream());
   cudaEventSynchronize (stop);
   cudaEventElapsedTime(&elapsed, start, stop);
   cudaEventDestroy(start);
@@ -192,10 +195,10 @@ void conv(void *buffers[], void *_args)
 
 }
 
-float * submit_conv(const float *in, const int in_n, const int in_c, const int in_h, const int in_w, const int pad_h, const int pad_w, const int str_h, 
-                    const int str_w, int dil_h, const int dil_w, starpu_data_handle_t filt_hand, struct convolution_params *prms, struct_starpu_task **task_r)
+starpu_data_handle_t submit_conv(const float *in, const int in_n, const int in_c, const int in_h, const int in_w, const int pad_h, const int pad_w, const int str_h, 
+                    const int str_w, int dil_h, const int dil_w, starpu_data_handle_t filt_handle, struct convolution_params *prms, struct starpu_task *task_r)
 {
-  starpu_data_handle_t in_hand, out_hand;
+  starpu_data_handle_t in_handle, out_handle;
 
   //Convolution
   cudnnCreateConvolutionDescriptor(&conv_desc);
@@ -204,53 +207,51 @@ float * submit_conv(const float *in, const int in_n, const int in_c, const int i
   //Tensor in
   cudnnCreateTensorDescriptor(&in_desc);
   cudnnSetTensor4dDescriptor(in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, in_n, in_c, in_h, in_w);
+
   const int in_size = in_n * in_c * in_h * in_w;
   starpu_memory_pin(in, sizeof(in[0]) * in_size);
-  starpu_vector_data_register(&in_hand, STARPU_MAIN_RAM, (uintptr_t)in, in_size, sizeof(in[0]));
+  starpu_vector_data_register(&in_handle, STARPU_MAIN_RAM, (uintptr_t)in, in_size, sizeof(in[0]));
 
   //Setup the output tensor and allocate the proper amount of memory prior to launch the actual convolution
   int out_n, out_c, out_h, out_w;
   cudnnGetConvolution2dForwardOutputDim(conv_desc, in_desc, filt_desc, &out_n, &out_c, &out_h, &out_w);
   const int out_size = out_n * out_c * out_h * out_w;
   prms->out_size = out_size;
-  float *out = (float *) malloc(out_size * sizeof(float));
 
   //Tensor out
   cudnnCreateTensorDescriptor(&out_desc);
   cudnnSetTensor4dDescriptor(out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, out_n, out_c, out_h, out_w);
-  starpu_memory_pin(out, sizeof(out[0]) * out_size);
-  starpu_vector_data_register(&out_hand, -1, NULL, out_size, sizeof(out[0]));
+  starpu_vector_data_register(&out_handle, -1, NULL, out_size, sizeof(in[0]));
 
   struct starpu_task *task = starpu_task_create();
   task->cl = &conv_cl;
-  task->handles[0] = in_hand;
-  task->handles[1] = filt_hand;
-  task->handles[2] = out_hand;
+  task->handles[0] = in_handle;
+  task->handles[1] = filt_handle;
+  task->handles[2] = out_handle;
   task->cl_arg = prms;
   task->cl_arg_size = sizeof(struct convolution_params);
   task->destroy = 0;
 
-  if(task_r)
-    *task_r = task;
+  if(task)
+  {
+    task_r = &task;
+  }
 
   int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
 
-	starpu_task_wait_for_all();
-	double length = 0.0;
+  starpu_task_wait_for_all();
   struct starpu_profiling_task_info *info = task->profiling_info;
 	double delay = starpu_timing_timespec_delay_us(&info->submit_time, &info->start_time);
-	length = starpu_timing_timespec_delay_us(&info->start_time, &info->end_time);
+	double length = starpu_timing_timespec_delay_us(&info->start_time, &info->end_time);
 	starpu_task_destroy(task);
   sumDelayTime += delay/1000.0;
-  sumLenghtTime += length/1000.0;
+  sumLengthTime += length/1000.0;
 
-
-  starpu_data_unregister(in_hand);
-  starpu_data_unregister(out_hand);
-
-  return out;
+  starpu_data_unregister(in_handle);
+  return out_handle;
 }
+
 
 void free_conv(const struct convolution_params *prms) 
 {
