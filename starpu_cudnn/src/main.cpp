@@ -63,15 +63,15 @@ int main(int argc, char **argv)
   const int pad_h = 1, pad_w = 1, str_h = 1, str_w = 1, dil_h = 1, dil_w = 1;
   struct convolution_params conv_params = {1.0, 0.0}; 
 
-  const int in_size = in_n * in_c * in_h * in_w;                    
-  float in_data[in_size];
+  const int in_size = in_n * in_c * in_h * in_w;          
+  float *in_data = malloc(in_size * sizeof(float));
   for(int i=0; i<in_size; i++) 
   {
     in_data[i] = i;
   }
 
   const int filt_size = filt_k * filt_c * filt_h * filt_w;  
-  float filt_data[filt_size];
+  float *filt_data = malloc(filt_size * sizeof(float));
   for(int i=0; i<filt_size; i++) 
   {
     filt_data[i] = 1.0f;
@@ -96,34 +96,34 @@ int main(int argc, char **argv)
     struct starpu_task *task;
     starpu_data_handle_t filt_handle = init_filter(filt_data, filt_k, filt_c, filt_h, filt_w, &conv_params);
 
-    //--------------------------------------------------
     //Convolution
     cudnnCreateConvolutionDescriptor(&conv_desc);
     cudnnSetConvolution2dDescriptor(conv_desc, pad_h, pad_w, str_h, str_w, dil_h, dil_w, CUDNN_CONVOLUTION, CUDNN_DATA_FLOAT);
-    
+
     //Tensor in
-    starpu_data_handle_t in_handle; 
+    cudnnCreateTensorDescriptor(&in_desc);
+    cudnnSetTensor4dDescriptor(in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, in_n, in_c, in_h, in_w);
     const int in_size = in_n * in_c * in_h * in_w;
-    printf("in size : %d\n", in_size);
     starpu_memory_pin(in_data, sizeof(in_data[0]) * in_size);
+    starpu_data_handle_t in_handle;
     starpu_vector_data_register(&in_handle, STARPU_MAIN_RAM, (uintptr_t)in_data, in_size, sizeof(in_data[0]));
-    //--------------------------------------------------
 
     int out_size = 0;
-    starpu_data_handle_t out_handle = submit_conv(&out_size, in_handle, filt_handle, &conv_params, task);
+    starpu_data_handle_t out_handle = submit_conv(&out_size, in_handle, filt_handle, &conv_params, task);    
     starpu_data_unregister_submit(in_handle);
-    printf("data size : %d\n", out_size);
+    printf("out size : %d\n", out_size);
 
-    starpu_data_handle_t out_handle2 = submit_conv(&out_size, out_handle, filt_handle, &conv_params, task);
-    starpu_data_unregister_submit(out_handle);
-    printf("data size : %d\n", out_size);
+    //cudnnSetTensor4dDescriptor(in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, 1, 1, 6, 6);
+    //starpu_data_handle_t out_handle2 = submit_conv(&out_size, out_handle, filt_handle, &conv_params, task);
+    //starpu_data_unregister_submit(out_handle);
+    //printf("data size : %d\n", out_size);
 
     if(show)
     {
-      show_result(out_size, out_handle2);
+      show_result(out_size, out_handle);
     }
 
-    starpu_data_unregister(out_handle2);
+    starpu_data_unregister(out_handle);
     starpu_data_unregister(filt_handle);
 
     starpu_memory_unpin(in_data, sizeof(in_data[0])*in_size);
@@ -138,6 +138,9 @@ int main(int argc, char **argv)
   printf("CUDNN : %lf\n", sumCudnnTime/(double)repeat);
   printf("Delay : %lf\n", sumDelayTime/(double)repeat);
   printf("Length : %lf\n", sumLengthTime/(double)repeat);
+
+  free(in_data);
+  free(filt_data);
 
   return 0;
 }
@@ -267,9 +270,9 @@ starpu_data_handle_t submit_conv(int *out_size, starpu_data_handle_t in_handle, 
 
   starpu_task_wait_for_all();
   struct starpu_profiling_task_info *info = task->profiling_info;
-	double delay = starpu_timing_timespec_delay_us(&info->submit_time, &info->start_time);
-	double length = starpu_timing_timespec_delay_us(&info->start_time, &info->end_time);
-	starpu_task_destroy(task);
+  double delay = starpu_timing_timespec_delay_us(&info->submit_time, &info->start_time);
+  double length = starpu_timing_timespec_delay_us(&info->start_time, &info->end_time);
+  starpu_task_destroy(task);
   sumDelayTime += delay/1000.0;
   sumLengthTime += length/1000.0;
 
