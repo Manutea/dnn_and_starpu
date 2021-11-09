@@ -7,17 +7,7 @@
 
 #define REQUESTED_ALGO 10
 
-cudnnFilterDescriptor_t filt_desc; 
-cudnnPoolingDescriptor_t pool_desc;
-cudnnConvolutionDescriptor_t conv_desc;
-cudnnTensorDescriptor_t in_desc, out_desc;
-
 cudnnHandle_t cudnn[STARPU_NMAXWORKERS];
-
-struct convolution_params
-{
-  float alpha, beta;  
-};
 
 struct tensor 
 {
@@ -25,15 +15,22 @@ struct tensor
   int x, y, z, w;
 };
 
-void free_dnn(const struct convolution_params *);
+void free_dnn();
 void show_result(const int, starpu_data_handle_t);
 
 void init_cudnn(void *);
 void free_tensor(struct tensor);
 struct tensor init_tensor(const float *, const int, const int, const int, const int);
 
+struct convolution_forward_params
+{
+  float alpha, beta;
+  cudnnTensorDescriptor_t in_desc, out_desc;
+  cudnnFilterDescriptor_t filt_desc;
+  cudnnConvolutionDescriptor_t conv_desc;
+};
 void convolution_forward(void **, void *);
-struct tensor submit_convolution_forward(int, int, int, int, int, int, struct tensor, struct tensor, struct convolution_params *);
+struct tensor submit_convolution_forward(int, int, int, int, int, int, float, float, struct tensor, struct tensor);
 static struct starpu_perfmodel convolution_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -48,8 +45,14 @@ static struct starpu_codelet convolution_forward_cl =
   .model = &convolution_forward_model,
 };
 
+struct pooling_forward_params
+{
+  float alpha, beta;
+  cudnnTensorDescriptor_t in_desc, out_desc;
+  cudnnPoolingDescriptor_t pool_desc;
+};
 void pooling_forward(void **, void *);
-struct tensor submit_max_pooling_forward(int, int, int, int, int, int, struct tensor, struct convolution_params *);
+struct tensor submit_max_pooling_forward(int, int, int, int, int, int, float, float, struct tensor);
 static struct starpu_perfmodel pooling_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -77,11 +80,10 @@ int main(int argc, char **argv)
   const int in_h = atoi(argv[3]);
   const int in_w = atoi(argv[4]);
 
-  struct convolution_params conv_params = {1.0, 0.0}; 
-
   const int in_n = 1, in_c = 1;
   const int in_size = in_n * in_c * in_h * in_w;          
-  float *in_data = malloc(in_size * sizeof(float)); //starpu_malloc, ca evite de devoir faire memory_pin
+  float *in_data;
+  starpu_malloc((void**)&in_data, in_size * sizeof(float));
   for(int i=0; i<in_size; i++) 
   {
     in_data[i] = i;
@@ -89,7 +91,8 @@ int main(int argc, char **argv)
 
   const int filt_k = 1, filt_c = 1, filt_h = 2, filt_w = 2;
   const int filt_size = filt_k * filt_c * filt_h * filt_w;  
-  float *filt_data = malloc(filt_size * sizeof(float)); //pareil
+  float *filt_data;
+  starpu_malloc((void**)&filt_data, filt_size * sizeof(float));
   for(int i=0; i<filt_size; i++) 
   {
     filt_data[i] = 1.0f;
@@ -112,11 +115,11 @@ int main(int argc, char **argv)
     struct tensor filter = init_tensor(filt_data, filt_k, filt_c, filt_h, filt_w);
     struct tensor in = init_tensor(in_data, in_n, in_c, in_h, in_w);
 
-    struct tensor out = submit_convolution_forward(1, 1, 1, 1, 1, 1, in, filter, &conv_params);
+    struct tensor out = submit_convolution_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, in, filter);
     free_tensor(in);
-    struct tensor out2 = submit_convolution_forward(1, 1, 1, 1, 1, 1, out, filter, &conv_params);
+    struct tensor out2 = submit_convolution_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, out, filter);
     free_tensor(out);
-    struct tensor out3 = submit_max_pooling_forward(3, 3, 0, 0, 1, 1, in, &conv_params);    
+    struct tensor out3 = submit_max_pooling_forward(3, 3, 0, 0, 1, 1, 1.0, 0.0, out2);    
     free_tensor(out2);
 
     if(show)
@@ -127,28 +130,19 @@ int main(int argc, char **argv)
 
     free_tensor(out3);
     free_tensor(filter);
-
-    starpu_memory_unpin(in_data, sizeof(in_data[0])*in_size);
-    starpu_memory_unpin(filt_data, sizeof(filt_data[0])*filt_size);
   }
 
-  free_dnn(&conv_params);
-  starpu_shutdown();
+  starpu_free(in_data);
+  starpu_free(filt_data);
 
-  free(in_data);
-  free(filt_data);
+  free_dnn();
+  starpu_shutdown();
 
   return 0;
 }
 
-void free_dnn(const struct convolution_params *prms) 
+void free_dnn() 
 {
-  cudnnDestroyTensorDescriptor(out_desc);
-  cudnnDestroyConvolutionDescriptor(conv_desc);
-  cudnnDestroyFilterDescriptor(filt_desc);
-  cudnnDestroyTensorDescriptor(in_desc);
-  cudnnDestroyTensorDescriptor(pool_desc);
-
   for(int i = 0; i < starpu_cuda_worker_get_count(); i++)
   {
     cudnnDestroy(cudnn[i]);
@@ -191,9 +185,7 @@ struct tensor init_tensor(const float *data, const int x, const int y, const int
   const int size = x * y * z * w;
   cudnnDestroyTensorDescriptor(desc);
 
-  starpu_memory_pin(data, sizeof(data[0]) * size);
   starpu_vector_data_register(&handle, STARPU_MAIN_RAM, (uintptr_t)data, size, sizeof(data[0]));
-
   struct tensor filter_tensor = {handle, x, y, z, w};
 
   return filter_tensor;
@@ -206,57 +198,59 @@ void convolution_forward(void *buffers[], void *_args)
   const float *in_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
   const float *filt_data  = (float *)STARPU_VECTOR_GET_PTR(buffers[1]);
   float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[2]); 
-  const struct convolution_params *prms = (struct convolution_params *)_args;
+  const struct convolution_forward_params *prms = (struct convolution_forward_params *)_args;
   const int id = starpu_worker_get_id();
 
   //This function attempts all algorithms available for cudnnConvolutionForward().
   int n_returnedAlgo;  
   cudnnConvolutionFwdAlgoPerf_t fwd_algo_perf[REQUESTED_ALGO];
-  cudnnFindConvolutionForwardAlgorithm(cudnn[id], in_desc, filt_desc, conv_desc, out_desc, REQUESTED_ALGO, &n_returnedAlgo, fwd_algo_perf);
+  cudnnFindConvolutionForwardAlgorithm(cudnn[id], prms->in_desc, prms->filt_desc, prms->conv_desc, prms->out_desc, REQUESTED_ALGO, &n_returnedAlgo, fwd_algo_perf);
 
   //This function returns the amount of GPU memory workspace the user needs to allocate to be able to call cudnnConvolutionForward() with the specified algorithm.
   int ws_size = 0;
   cudnnConvolutionFwdAlgo_t fwd_algo = fwd_algo_perf[0].algo;
-  cudnnGetConvolutionForwardWorkspaceSize(cudnn[id], in_desc, filt_desc, conv_desc, out_desc, fwd_algo, &ws_size);
+  cudnnGetConvolutionForwardWorkspaceSize(cudnn[id], prms->in_desc, prms->filt_desc, prms->conv_desc, prms->out_desc, fwd_algo, &ws_size);
 
   if(ws_size > 0)
   {
     float *ws_data;
     cudaMalloc(&ws_data, ws_size);
-    cudnnConvolutionForward(cudnn[id], &prms->alpha, in_desc, in_data, filt_desc, filt_data, conv_desc, 
-                           fwd_algo, ws_data, ws_size, &prms->beta, out_desc, out_data);
+    cudnnConvolutionForward(cudnn[id], &prms->alpha, prms->in_desc, in_data, prms->filt_desc, filt_data, prms->conv_desc, 
+                           fwd_algo, ws_data, ws_size, &prms->beta, prms->out_desc, out_data);
     cudaFree(ws_data);
-    printf("\n\n--------HEY !!!-------\n\n");
   }
   else 
   {
-    cudnnConvolutionForward(cudnn[id], &prms->alpha, in_desc, in_data, filt_desc, filt_data, conv_desc, 
-                           fwd_algo, NULL, ws_size, &prms->beta, out_desc, out_data);
+    cudnnConvolutionForward(cudnn[id], &prms->alpha, prms->in_desc, in_data, prms->filt_desc, filt_data, prms->conv_desc, 
+                           fwd_algo, NULL, ws_size, &prms->beta, prms->out_desc, out_data);
   }
 }
 
-struct tensor submit_convolution_forward(int pad_h, int pad_w, int u, int v, int dil_h, int dil_w, struct tensor in, struct tensor filter, struct convolution_params *prms)
+struct tensor submit_convolution_forward(int pad_h, int pad_w, int u, int v, int dil_h, int dil_w, float alpha, float beta, struct tensor in, struct tensor filter)
 {
+  struct convolution_forward_params prms;
+  prms.alpha = alpha;
+  prms.beta = beta;
+
   //In Descriptor
-  cudnnCreateTensorDescriptor(&in_desc);
-  cudnnSetTensor4dDescriptor(in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, in.x, in.y, in.z, in.w);
+  cudnnCreateTensorDescriptor(&prms.in_desc);
+  cudnnSetTensor4dDescriptor(prms.in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, in.x, in.y, in.z, in.w);
 
   //Filter Descriptor
-  cudnnCreateFilterDescriptor(&filt_desc);
-  cudnnSetFilter4dDescriptor(filt_desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, filter.x, filter.y, filter.z, filter.w);
+  cudnnCreateFilterDescriptor(&prms.filt_desc);
+  cudnnSetFilter4dDescriptor(prms.filt_desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, filter.x, filter.y, filter.z, filter.w);
 
   //Convolution
-  cudnnCreateConvolutionDescriptor(&conv_desc);
-  cudnnSetConvolution2dDescriptor(conv_desc, pad_h, pad_w, u, v, dil_h, dil_w, CUDNN_CONVOLUTION, CUDNN_DATA_FLOAT);
-
+  cudnnCreateConvolutionDescriptor(&prms.conv_desc);
+  cudnnSetConvolution2dDescriptor(prms.conv_desc, pad_h, pad_w, u, v, dil_h, dil_w, CUDNN_CONVOLUTION, CUDNN_DATA_FLOAT);
 
   int out_n, out_c, out_h, out_w;
-  cudnnGetConvolution2dForwardOutputDim(conv_desc, in_desc, filt_desc, &out_n, &out_c, &out_h, &out_w);
+  cudnnGetConvolution2dForwardOutputDim(prms.conv_desc, prms.in_desc, prms.filt_desc, &out_n, &out_c, &out_h, &out_w);
 
   //Tensor out
   starpu_data_handle_t out_handle;
-  cudnnCreateTensorDescriptor(&out_desc);
-  cudnnSetTensor4dDescriptor(out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, out_n, out_c, out_h, out_w);
+  cudnnCreateTensorDescriptor(&prms.out_desc);
+  cudnnSetTensor4dDescriptor(prms.out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, out_n, out_c, out_h, out_w);
   starpu_vector_data_register(&out_handle, -1, NULL, out_n * out_c * out_h * out_w, sizeof(float));
 
   struct starpu_task *task = starpu_task_create();
@@ -264,12 +258,17 @@ struct tensor submit_convolution_forward(int pad_h, int pad_w, int u, int v, int
   task->handles[0] = in.handle;
   task->handles[1] = filter.handle;
   task->handles[2] = out_handle;
-  task->cl_arg = prms;
-  task->cl_arg_size = sizeof(struct convolution_params);
+  task->cl_arg = &prms;
+  task->cl_arg_size = sizeof(struct convolution_forward_params);
   task->destroy = 0;
 
   int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
+
+  //cudnnDestroyTensorDescriptor(prms.in_desc);
+  //cudnnDestroyFilterDescriptor(prms.filt_desc);
+  //cudnnDestroyConvolutionDescriptor(prms.conv_desc);
+  //cudnnDestroyTensorDescriptor(prms.out_desc);
 
   struct tensor out = {out_handle, out_n, out_c, out_h, out_w};
   return out;
@@ -281,42 +280,50 @@ void pooling_forward(void *buffers[], void *_args)
 {
   const float *in_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
   float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[1]); 
-  const struct convolution_params *prms = (struct convolution_params *)_args;
+  const struct pooling_forward_params *prms = (struct pooling_forward_params *)_args;
   const int id = starpu_worker_get_id();
 
-  cudnnPoolingForward(cudnn[id], pool_desc, &prms->alpha, in_desc, in_data, &prms->beta, out_desc, out_data);
+  cudnnPoolingForward(cudnn[id], prms->pool_desc, &prms->alpha, prms->in_desc, in_data, &prms->beta, prms->out_desc, out_data);
 }
 
-struct tensor submit_max_pooling_forward(int windowHeight, int windowWidth, int verticalPadding, int horizontalPadding, int verticalStride, int horizontalStride, struct tensor in, struct convolution_params *prms) 
+struct tensor submit_max_pooling_forward(int windowHeight, int windowWidth, int verticalPadding, int horizontalPadding, int verticalStride, int horizontalStride, float alpha, float beta, struct tensor in) 
 {
+  struct pooling_forward_params prms;
+  prms.alpha = alpha;
+  prms.beta = beta;
+
   //In Descriptor
-  cudnnCreateTensorDescriptor(&in_desc);
-  cudnnSetTensor4dDescriptor(in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, in.x, in.y, in.z, in.w);
+  cudnnCreateTensorDescriptor(&prms.in_desc);
+  cudnnSetTensor4dDescriptor(prms.in_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, in.x, in.y, in.z, in.w);
 
   //Max Pooling
-  cudnnCreatePoolingDescriptor(&pool_desc);
-  cudnnSetPooling2dDescriptor(pool_desc, CUDNN_POOLING_MAX, CUDNN_NOT_PROPAGATE_NAN, windowHeight, windowWidth, verticalPadding, horizontalPadding, verticalStride, horizontalStride);
+  cudnnCreatePoolingDescriptor(&prms.pool_desc);
+  cudnnSetPooling2dDescriptor(prms.pool_desc, CUDNN_POOLING_MAX, CUDNN_NOT_PROPAGATE_NAN, windowHeight, windowWidth, verticalPadding, horizontalPadding, verticalStride, horizontalStride);
 
   int out_n, out_c, out_h, out_w;
-  cudnnGetPooling2dForwardOutputDim(pool_desc, in_desc, &out_n, &out_c, &out_h, &out_w);
+  cudnnGetPooling2dForwardOutputDim(prms.pool_desc, prms.in_desc, &out_n, &out_c, &out_h, &out_w);
 
   //Tensor out
   starpu_data_handle_t out_handle;
-  cudnnCreateTensorDescriptor(&out_desc);
-  cudnnSetTensor4dDescriptor(out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, out_n, out_c, out_h, out_w);
+  cudnnCreateTensorDescriptor(&prms.out_desc);
+  cudnnSetTensor4dDescriptor(prms.out_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, out_n, out_c, out_h, out_w);
   starpu_vector_data_register(&out_handle, -1, NULL, out_n * out_c * out_h * out_w, sizeof(float));
 
   struct starpu_task *task = starpu_task_create();
   task->cl = &pooling_forward_cl;
   task->handles[0] = in.handle;
   task->handles[1] = out_handle;
-  task->cl_arg = prms;
-  task->cl_arg_size = sizeof(struct convolution_params);
+  task->cl_arg = &prms;
+  task->cl_arg_size = sizeof(struct pooling_forward_params);
   task->destroy = 0;
 
   int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
  
+  //cudnnDestroyTensorDescriptor(in_desc);
+  //cudnnDestroyTensorDescriptor(out_desc);
+  //cudnnDestroyPoolingDescriptor(pool_desc);
+
   struct tensor out = {out_handle, out_n, out_c, out_h, out_w};
   return out;
 }
