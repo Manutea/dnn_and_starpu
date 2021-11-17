@@ -23,7 +23,7 @@ void show_result(const tensor);
 
 void init_cudnn(void *);
 void free_tensor(tensor);
-tensor init_tensor(const float *, const int, const int, const int, const int);
+tensor init_tensor(const float *, int, int, int, int);
 
 // Convolution Forward
 struct convolution2D_forward_params
@@ -35,8 +35,7 @@ struct convolution2D_forward_params
   int out_n, out_c, out_h, out_w;
 };
 void convolution2D_forward(void **, void *);
-tensor submit_convolution2D_forward(const int, const int, const int, const int, const int, const int, 
-                                        const float, const float, const tensor, const tensor, const tensor);
+tensor submit_convolution2D_forward(int, int, int, int, int, int, float, float, const tensor, const tensor, const tensor);
 static struct starpu_perfmodel convolution2D_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -62,7 +61,7 @@ struct pooling2D_forward_params
   int out_n, out_c, out_h, out_w;
 };
 void pooling2D_forward(void **, void *);
-tensor submit_max_pooling2D_forward(const int, const int, const int, int, const int, const int, const float, const float, const tensor, const tensor);
+tensor submit_max_pooling2D_forward(int, int, int, int, int, int, float, float, const tensor, const tensor);
 static struct starpu_perfmodel pooling2D_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -84,7 +83,7 @@ struct relu_forward_params
   int in_n, in_c, in_h, in_w;
 };
 void relu_forward(void **, void *);
-tensor submit_relu_forward(const float, const float, const tensor);
+tensor submit_relu_forward(float, float, const tensor);
 static struct starpu_perfmodel relu_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -106,7 +105,7 @@ struct softmax_forward_params
   int in_n, in_c, in_h, in_w;
 };
 void softmax_forward(void **, void *);
-tensor submit_softmax_forward(const float, const float, const tensor);
+tensor submit_softmax_forward(float, float, const tensor);
 static struct starpu_perfmodel softmax_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -128,7 +127,7 @@ struct fullyco_forward_params
   int in_n, in_c, in_h, in_w;
 };
 void fullyco_forward(void **, void *);
-tensor submit_fullyco_forward(const float, const float, const tensor);
+tensor submit_fullyco_forward(float, float, const tensor);
 static struct starpu_perfmodel fullyco_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -277,7 +276,7 @@ void free_tensor(tensor tensor)
   free(tensor);
 }
 
-tensor init_tensor(const float *data, const int n, const int c, const int h, const int w)
+tensor init_tensor(const float *data, int n, int c, int h, int w)
 {
   tensor out = (tensor)malloc(sizeof(tensor));
   out->n = n;
@@ -356,8 +355,8 @@ void convolution2D_forward(void *buffers[], void *_args)
   cudnnDestroyTensorDescriptor(bias_desc);
 }
 
-tensor submit_convolution2D_forward(const int pad_h, const int pad_w, const int u, const int v, const int dil_h, const int dil_w, 
-const float alpha, const float beta, const tensor in, const tensor filter, const tensor bias)
+tensor submit_convolution2D_forward(int pad_h, int pad_w, int u, int v, int dil_h, int dil_w, 
+float alpha, float beta, const tensor in, const tensor filter, const tensor bias)
 {
   tensor out = (tensor)malloc(sizeof(tensor));
 
@@ -366,11 +365,27 @@ const float alpha, const float beta, const tensor in, const tensor filter, const
   out->h = 1 + ( in->h + 2*pad_h - (((filter->h-1)*dil_h)+1) )/u;
   out->w = 1 + ( in->w + 2*pad_w - (((filter->w-1)*dil_w)+1) )/v;
 
-  const struct convolution2D_forward_params prms = {alpha, beta, 
-                                            in->n, in->c, in->h, in->w, 
-                                            filter->n, filter->c, filter->h, filter->w,
-                                            pad_h, pad_w, u, v, dil_h, dil_w,
-                                            out->n, out->c, out->h, out->w};
+  struct convolution2D_forward_params *prms = malloc(sizeof(struct convolution2D_forward_params));
+  prms->alpha = alpha;
+  prms->beta = beta;
+  prms->in_n = in->n;
+  prms->in_c = in->c;
+  prms->in_h = in->h;
+  prms->in_w = in->w;
+  prms->filter_n = filter->n;
+  prms->filter_c = filter->c;
+  prms->filter_h = filter->h;
+  prms->filter_w = filter->w;
+  prms->pad_h = pad_h;
+  prms->pad_w = pad_w;
+  prms->u = u;
+  prms->v = v;
+  prms->dil_h = dil_h;
+  prms->dil_w = dil_w;
+  prms->out_n = out->n;
+  prms->out_c = out->c;
+  prms->out_h = out->h;
+  prms->out_w = out->w;
 
   //Tensor out
   starpu_vector_data_register(&out->handle, -1, NULL, out->n * out->c * out->h * out->w, sizeof(float));
@@ -381,14 +396,12 @@ const float alpha, const float beta, const tensor in, const tensor filter, const
   task->handles[1] = filter->handle;
   task->handles[2] = bias->handle;
   task->handles[3] = out->handle;
-  task->cl_arg = &prms;
+  task->cl_arg = prms;
   task->cl_arg_size = sizeof(const struct convolution2D_forward_params);
-  task->destroy = 0;
+  task->cl_arg_free = 1;
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
-
-  starpu_task_wait_for_all();
 
   return out;
 }
@@ -432,8 +445,8 @@ void pooling2D_forward(void *buffers[], void *_args)
   cudnnDestroyTensorDescriptor(bias_desc);
 }
 
-tensor submit_max_pooling2D_forward(const int windowHeight, const int windowWidth, const int verticalPadding, const int horizontalPadding, 
-const int verticalStride, const int horizontalStride, const float alpha, const float beta, const tensor in, const tensor bias) 
+tensor submit_max_pooling2D_forward(int windowHeight, int windowWidth, int verticalPadding, int horizontalPadding, 
+ int verticalStride, int horizontalStride, float alpha, float beta, const tensor in, const tensor bias) 
 {
   tensor out = (tensor)malloc(sizeof(tensor));
   out->n = in->n;
@@ -441,11 +454,25 @@ const int verticalStride, const int horizontalStride, const float alpha, const f
   out->h = 1 + (in->h + 2*horizontalPadding - windowHeight)/horizontalStride;
   out->w = 1 + (in->w + 2*verticalPadding - windowWidth)/verticalStride;
 
-  const struct pooling2D_forward_params prms = {alpha, beta,
-                                        in->n, in->c, in->h, in->w,
-                                        CUDNN_POOLING_MAX, CUDNN_NOT_PROPAGATE_NAN,
-                                        windowHeight, windowWidth, verticalPadding, horizontalPadding, verticalStride, horizontalStride,
-                                        out->n, out->c, out->h, out->w};
+  struct pooling2D_forward_params *prms = malloc(sizeof(struct pooling2D_forward_params));
+  prms->alpha = alpha;
+  prms->beta = beta;
+  prms->in_n = in->n;
+  prms->in_c = in->c;
+  prms->in_h = in->h;
+  prms->in_w = in->w;
+  prms->mode = CUDNN_POOLING_MAX;
+  prms->maxpoolingNanOpt = CUDNN_NOT_PROPAGATE_NAN;
+  prms->windowHeight = windowHeight;
+  prms->windowWidth = windowWidth;
+  prms->verticalPadding = verticalPadding;
+  prms->horizontalPadding = horizontalPadding;
+  prms->verticalStride = verticalStride;
+  prms->horizontalStride = horizontalStride;
+  prms->out_n = out->n;
+  prms->out_c = out->c;
+  prms->out_h = out->h;
+  prms->out_w = out->w;
 
   //Tensor out
   starpu_vector_data_register(&out->handle, -1, NULL, out->n * out->c * out->h * out->w, sizeof(float));
@@ -455,14 +482,12 @@ const int verticalStride, const int horizontalStride, const float alpha, const f
   task->handles[0] = in->handle;
   task->handles[1] = bias->handle;
   task->handles[2] = out->handle;
-  task->cl_arg = &prms;
+  task->cl_arg = prms;
   task->cl_arg_size = sizeof(struct pooling2D_forward_params);
-  task->destroy = 0;
+  task->cl_arg_free = 1;
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
-  
-  starpu_task_wait_for_all();
 
   return out;
 }
@@ -490,7 +515,7 @@ void relu_forward(void *buffers[], void *_args)
   cudnnDestroyTensorDescriptor(tensor_desc);
 }
 
-tensor submit_relu_forward(const float alpha, const float beta, const tensor in) 
+tensor submit_relu_forward(float alpha, float beta, const tensor in) 
 {
   tensor out = (tensor)malloc(sizeof(tensor));
   out->n = in->n;
@@ -498,7 +523,13 @@ tensor submit_relu_forward(const float alpha, const float beta, const tensor in)
   out->h = in->h;
   out->w = in->w;
 
-  const struct relu_forward_params prms = {alpha, beta, in->n, in->c, in->h, in->w,};
+  struct relu_forward_params *prms = malloc(sizeof(struct relu_forward_params));
+  prms->alpha = alpha;
+  prms->alpha = beta;
+  prms->in_n = in->n;
+  prms->in_c = in->c;
+  prms->in_h = in->h;
+  prms->in_w = in->w;
 
   //Tensor out
   starpu_vector_data_register(&out->handle, -1, NULL, out->n * out->c * out->h * out->w, sizeof(float));
@@ -507,14 +538,12 @@ tensor submit_relu_forward(const float alpha, const float beta, const tensor in)
   task->cl = &relu_forward_cl;
   task->handles[0] = in->handle;
   task->handles[1] = out->handle;
-  task->cl_arg = &prms;
+  task->cl_arg = prms;
   task->cl_arg_size = sizeof(struct relu_forward_params);
-  task->destroy = 0;
+  task->cl_arg_free = 1;
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
-  
-  starpu_task_wait_for_all();
 
   return out;
 }
@@ -537,7 +566,7 @@ void softmax_forward(void *buffers[], void *_args)
   cudnnDestroyTensorDescriptor(tensor_desc);
 }
 
-tensor submit_softmax_forward(const float alpha, const float beta, const tensor in) 
+tensor submit_softmax_forward(float alpha, float beta, const tensor in) 
 {
   tensor out = (tensor)malloc(sizeof(tensor));
   out->n = in->n;
@@ -545,7 +574,13 @@ tensor submit_softmax_forward(const float alpha, const float beta, const tensor 
   out->h = in->h;
   out->w = in->w;
 
-  const struct softmax_forward_params prms = {alpha, beta, in->n, in->c, in->h, in->w,};
+  struct softmax_forward_params *prms = malloc(sizeof(struct softmax_forward_params));
+  prms->alpha = alpha;
+  prms->beta = beta;
+  prms->in_n = in->n;
+  prms->in_c = in->n;
+  prms->in_h = in->n;
+  prms->in_w = in->n;
 
   //Tensor out
   starpu_vector_data_register(&out->handle, -1, NULL, out->n * out->c * out->h * out->w, sizeof(float));
@@ -554,14 +589,12 @@ tensor submit_softmax_forward(const float alpha, const float beta, const tensor 
   task->cl = &softmax_forward_cl;
   task->handles[0] = in->handle;
   task->handles[1] = out->handle;
-  task->cl_arg = &prms;
+  task->cl_arg = prms;
   task->cl_arg_size = sizeof(struct softmax_forward_params);
-  task->destroy = 0;
+  task->cl_arg_free = 1;
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
-  
-  starpu_task_wait_for_all();
 
   return out;
 }
@@ -572,7 +605,7 @@ void fullyco_forward(void *buffers[], void *_args)
 {
 }
 
-tensor submit_fullyco_forward(const float alpha, const float beta, const tensor in)
+tensor submit_fullyco_forward(float alpha, float beta, const tensor in)
 {
 
 }
