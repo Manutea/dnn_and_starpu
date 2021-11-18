@@ -18,10 +18,10 @@ struct _tensor
 };
 typedef struct _tensor tensor;
 
-void free_dnn();
+void cudnn_shutdown();
 void show_result(const tensor *);
 
-void init_cudnn(void *);
+void cudnn_init(void *);
 void free_tensor(tensor *);
 tensor *init_tensor(const float *, int, int, int, int);
 
@@ -61,7 +61,7 @@ struct pooling2D_forward_params
   int out_n, out_c, out_h, out_w;
 };
 void pooling2D_forward(void **, void *);
-tensor *submit_max_pooling2D_forward(int, int, int, int, int, int, float, float, const tensor *, const tensor *);
+tensor *submit_max_pooling2D_forward(int, int, int, int, int, int, float, float, const tensor *);
 static struct starpu_perfmodel pooling2D_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -71,8 +71,8 @@ static struct starpu_codelet pooling2D_forward_cl =
 {
   .cuda_funcs = {pooling2D_forward},
   .cuda_flags = {STARPU_CUDA_ASYNC},
-  .nbuffers = 3,
-  .modes = {STARPU_R, STARPU_R, STARPU_W},
+  .nbuffers = 2,
+  .modes = {STARPU_R, STARPU_W},
   .model = &pooling2D_forward_model,
 };
 
@@ -182,9 +182,7 @@ int main(int argc, char **argv)
   starpu_malloc((void**)&conv2_bias_data, 1 * sizeof(float));
   conv2_bias_data[0] = 0.0f;
 
-  float *pool_bias_data;
-  starpu_malloc((void**)&pool_bias_data, 1 * sizeof(float));
-  pool_bias_data[0] = 0.0f;
+  starpu_fxt_autostart_profiling(0);
 
   const int ret = starpu_init(NULL);
   if (ret == -ENODEV)
@@ -195,12 +193,12 @@ int main(int argc, char **argv)
   /* Enable profiling */
   starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
 
-  starpu_execute_on_each_worker(init_cudnn, cudnn, STARPU_CUDA);
+  starpu_execute_on_each_worker(cudnn_init, cudnn, STARPU_CUDA);
 
   const tensor *filter = init_tensor(filt_data, filt_k, filt_c, filt_h, filt_w);
-  const tensor *pool_bias = init_tensor(pool_bias_data, 1, 1, 1, 1);
   const tensor *conv1_bias = init_tensor(conv1_bias_data, 1, 1, 1, 1);
   const tensor *conv2_bias = init_tensor(conv2_bias_data, 1, 1, 1, 1);
+  
   for(int i=0; i<repeat; i++)
   {
     const tensor *in = init_tensor(in_data, in_n, in_c, in_h, in_w);
@@ -209,7 +207,7 @@ int main(int argc, char **argv)
     free_tensor(in);
     const tensor *out2 = submit_convolution2D_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, out, filter, conv2_bias);
     free_tensor(out);
-    const tensor *out3 = submit_max_pooling2D_forward(3, 3, 0, 0, 1, 1, 1.0, 0.0, out2, pool_bias);
+    const tensor *out3 = submit_max_pooling2D_forward(3, 3, 0, 0, 1, 1, 1.0, 0.0, out2);
     free_tensor(out2);
     const tensor *out4 = submit_relu_forward(1.0, 1.0, out3);
     free_tensor(out3);
@@ -225,23 +223,22 @@ int main(int argc, char **argv)
   }
 
   free_tensor(filter);
-  free_tensor(pool_bias);
   free_tensor(conv1_bias);
   free_tensor(conv2_bias);
 
-  starpu_free(pool_bias_data);
   starpu_free(conv1_bias_data);
   starpu_free(conv2_bias_data);
   starpu_free(in_data);
   starpu_free(filt_data);
 
-  free_dnn();
+  cudnn_shutdown();
+  starpu_cublas_shutdown();
   starpu_shutdown();
 
   return 0;
 }
 
-void free_dnn() 
+void cudnn_shutdown() 
 {
   for(int i = 0; i < starpu_cuda_worker_get_count(); i++)
   {
@@ -262,7 +259,7 @@ void show_result(const tensor *tensor)
 
 
 //------- Initialize --------
-void init_cudnn(void *arg) 
+void cudnn_init(void *arg) 
 {
   cudnnHandle_t *cudnn_ = (cudnnHandle_t *) arg;
   const int id = starpu_worker_get_id();
@@ -411,12 +408,11 @@ float alpha, float beta, const tensor *in, const tensor *filter, const tensor *b
 void pooling2D_forward(void *buffers[], void *_args)
 {
   const float *in_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
-  float *bias_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[1]); 
-  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[2]); 
+  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[1]); 
   const struct pooling2D_forward_params *prms = (struct pooling2D_forward_params *)_args;
   const int id = starpu_worker_get_id();
 
-  cudnnTensorDescriptor_t in_desc, out_desc, bias_desc;
+  cudnnTensorDescriptor_t in_desc, out_desc;
   cudnnPoolingDescriptor_t pool_desc;
 
   //In Descriptor
@@ -433,20 +429,13 @@ void pooling2D_forward(void *buffers[], void *_args)
  
   cudnnPoolingForward(cudnn[id], pool_desc, &prms->alpha, in_desc, in_data, &prms->beta, out_desc, out_data);
 
-  //Bias Descriptor
-  cudnnCreateTensorDescriptor(&bias_desc);
-  cudnnSetTensor4dDescriptor(bias_desc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, 1, 1, 1, 1);
-
-  cudnnAddTensor(cudnn[id], &prms->alpha, bias_desc, bias_data, &prms->alpha, out_desc, out_data);
-
   cudnnDestroyTensorDescriptor(in_desc);
   cudnnDestroyTensorDescriptor(out_desc);
   cudnnDestroyPoolingDescriptor(pool_desc);
-  cudnnDestroyTensorDescriptor(bias_desc);
 }
 
 tensor *submit_max_pooling2D_forward(int windowHeight, int windowWidth, int verticalPadding, int horizontalPadding, 
- int verticalStride, int horizontalStride, float alpha, float beta, const tensor *in, const tensor *bias) 
+ int verticalStride, int horizontalStride, float alpha, float beta, const tensor *in) 
 {
   tensor *out = (tensor *)malloc(sizeof(tensor));
   out->n = in->n;
@@ -480,8 +469,7 @@ tensor *submit_max_pooling2D_forward(int windowHeight, int windowWidth, int vert
   struct starpu_task *task = starpu_task_create();
   task->cl = &pooling2D_forward_cl;
   task->handles[0] = in->handle;
-  task->handles[1] = bias->handle;
-  task->handles[2] = out->handle;
+  task->handles[1] = out->handle;
   task->cl_arg = prms;
   task->cl_arg_size = sizeof(struct pooling2D_forward_params);
   task->cl_arg_free = 1;
@@ -603,6 +591,21 @@ tensor *submit_softmax_forward(float alpha, float beta, const tensor *in)
 //------- FULLY CONNECTED --------
 void fullyco_forward(void *buffers[], void *_args)
 {
+  const float *in_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
+  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[1]); 
+  const struct softmax_forward_params *prms = (struct softmax_forward_params *)_args;
+
+  starpu_cublas_set_stream();
+  cublasHandle_t cublasHandle = starpu_cublas_get_local_handle();
+
+  //cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
+  //          prms->lead_dim_out, 
+  //          prms->m_batchSize, 
+  //          prms->lead_dim_inputs,
+  //          &prms->alpha,
+  //          pfc1, prms->lead_dim_inputs,
+  //          pool2, prms->lead_dim_inputs,
+  //          &prms->beta, out_data, prms->lead_dim_out);
 }
 
 tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in)
