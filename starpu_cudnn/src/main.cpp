@@ -125,9 +125,10 @@ struct fullyco_forward_params
 {
   float alpha, beta;
   int in_n, in_c, in_h, in_w;
+  int bias_h, bias_w;
 };
 void fullyco_forward(void **, void *);
-tensor *submit_fullyco_forward(float, float, const tensor *);
+tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in, const tensor *bias);
 static struct starpu_perfmodel fullyco_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -138,7 +139,7 @@ static struct starpu_codelet fullyco_forward_cl =
   .cuda_funcs = {fullyco_forward},
   .cuda_flags = {STARPU_CUDA_ASYNC},
   .nbuffers = 2,
-  .modes = {STARPU_R, STARPU_W},
+  .modes = {STARPU_R, STARPU_R, STARPU_W},
   .model = &fullyco_forward_model,
 };
 
@@ -209,6 +210,7 @@ int main(int argc, char **argv)
     free_tensor(out);
     const tensor *out3 = submit_max_pooling2D_forward(3, 3, 0, 0, 1, 1, 1.0, 0.0, out2);
     free_tensor(out2);
+    //fullyconnected
     const tensor *out4 = submit_relu_forward(1.0, 1.0, out3);
     free_tensor(out3);
     const tensor *out5 = submit_softmax_forward(1.0, 1.0, out4);
@@ -566,9 +568,9 @@ tensor *submit_softmax_forward(float alpha, float beta, const tensor *in)
   prms->alpha = alpha;
   prms->beta = beta;
   prms->in_n = in->n;
-  prms->in_c = in->n;
-  prms->in_h = in->n;
-  prms->in_w = in->n;
+  prms->in_c = in->c;
+  prms->in_h = in->h;
+  prms->in_w = in->w;
 
   //Tensor out
   starpu_vector_data_register(&out->handle, -1, NULL, out->n * out->c * out->h * out->w, sizeof(float));
@@ -592,23 +594,62 @@ tensor *submit_softmax_forward(float alpha, float beta, const tensor *in)
 void fullyco_forward(void *buffers[], void *_args)
 {
   const float *in_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
-  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[1]); 
-  const struct softmax_forward_params *prms = (struct softmax_forward_params *)_args;
+  const float *bias_data    = (float *)STARPU_VECTOR_GET_PTR(buffers[1]);
+  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[2]); 
+  const struct fullyco_forward_params *prms = (struct fullyco_forward_params *)_args;
 
   starpu_cublas_set_stream();
   cublasHandle_t cublasHandle = starpu_cublas_get_local_handle();
 
-  //cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
-  //          prms->lead_dim_out, 
-  //          prms->m_batchSize, 
-  //          prms->lead_dim_inputs,
-  //          &prms->alpha,
-  //          pfc1, prms->lead_dim_inputs,
-  //          pool2, prms->lead_dim_inputs,
-  //          &prms->beta, out_data, prms->lead_dim_out);
+  const int in_rows = prms->in_h * prms->in_w;
+  const int lead_dim_bias = (prms->bias_h > prms->bias_w) ? prms->bias_h : prms->bias_w;
+
+  cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
+            in_rows,                            //nb row of In and Out
+            prms->bias_w,                       //nb col of Bias and Out
+            in_rows,                            //nb col of In and row of Out
+            &prms->alpha,                          
+            in_data,                            //In
+            in_rows,                            //Leading dimension of two-dimensional array used to store the matrix In
+            bias_data,                          //Bias
+            lead_dim_bias,                      //Leading dimension of two-dimensional array used to store the matrix Bias
+            &prms->beta,
+            out_data,                           //Out
+            prms->bias_w);                      //Leading dimension of a two-dimensional array used to store the matrix C
 }
 
-tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in)
+tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in, const tensor *bias)
 {
+  tensor *out = (tensor *)malloc(sizeof(tensor));
+  out->n = in->n;
+  out->c = in->c;
+  out->h = 1;
+  out->w = bias->w;
 
+  struct fullyco_forward_params *prms = malloc(sizeof(struct fullyco_forward_params));
+  prms->alpha = alpha;
+  prms->beta = beta;
+  prms->in_n = in->n;
+  prms->in_c = in->c;
+  prms->in_h = in->h;
+  prms->in_w = in->w;
+  prms->bias_h = bias->h;
+  prms->bias_w = bias->w;
+
+  //Tensor out
+  starpu_vector_data_register(&out->handle, -1, NULL, out->n * out->c * out->h * out->w, sizeof(float));
+
+  struct starpu_task *task = starpu_task_create();
+  task->cl = &softmax_forward_cl;
+  task->handles[0] = in->handle;
+  task->handles[1] = bias->handle;
+  task->handles[2] = out->handle;
+  task->cl_arg = prms;
+  task->cl_arg_size = sizeof(struct fullyco_forward_params);
+  task->cl_arg_free = 1;
+
+  const int ret = starpu_task_submit(task);
+  STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
+
+  return out;
 }
