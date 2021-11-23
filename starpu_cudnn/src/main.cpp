@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "cudnn.h"
+#include "cifar10_reader.hpp"
 
 #define REQUESTED_ALGO 10
 
@@ -187,6 +188,8 @@ int main(int argc, char **argv)
   {
     return 77;
   }
+
+  auto dataset = cifar::read_dataset<std::vector, std::vector, uint8_t, uint8_t>();
 
   /* Enable profiling */
   starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
