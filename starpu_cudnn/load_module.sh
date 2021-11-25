@@ -31,3 +31,7 @@ module load runtime/starpu/1.3.8/mpi-cuda-fxt
 #module load dnn/cudnn/10.0-v7.5.0                                                                                                                                                                         
 #module load dnn/cudnn/10.0-v7.6.4.38                                                                                                                                                                      
 module load dnn/cudnn/11.2-v8.1.1.33         
+
+#https://gitlab.inria.fr/sed-bso/datacenter/-/blob/master/2021_11_mdb_energy_scope/2021_11_mdb_energy_scope.md
+module load trace/energy_scope
+#energy_scope_slurm.sh sleep 15

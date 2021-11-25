@@ -1,5 +1,6 @@
 #include "starpu_dnn.hpp"
-#include "cifar10_reader.hpp"
+#include "../include/cifar-10/cifar10_reader.hpp"
+#include "../include/mnist-fashion/mnist_reader.hpp"
 
 void show_result(const tensor *);
 
@@ -50,8 +51,7 @@ int main(int argc, char **argv)
     return 77;
   }
 
-  //auto dataset = cifar::read_dataset<std::vector, std::vector, uint8_t, uint8_t>();
-  //std::cout << "label : " << (int)dataset.training_images.at(0).at(0) << "\n";
+  auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>("data/mnist/");
 
   /* Enable profiling */
   starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
@@ -85,10 +85,9 @@ int main(int argc, char **argv)
     free_tensor(out5);
   }
 
-  starpu_task_wait_for_all();
-  free_tensor(filter, filt_data);
-  free_tensor(conv1_bias, conv1_bias_data);
-  free_tensor(conv2_bias, conv2_bias_data);
+  free_tensor(filter/*, filt_data*/);
+  free_tensor(conv1_bias/*, conv1_bias_data*/);
+  free_tensor(conv2_bias/*, conv2_bias_data*/);
 
   cudnn_shutdown();
   starpu_cublas_shutdown();
