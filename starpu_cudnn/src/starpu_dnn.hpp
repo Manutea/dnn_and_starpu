@@ -153,10 +153,18 @@ void cudnn_init(void *arg)
 
 void free_tensor(tensor *t, float *data = NULL)
 {
-  starpu_data_unregister_submit(t->handle);
-  free(t);
-  if(data != NULL)
+  if(data==NULL)
+  {
+    starpu_data_unregister_submit(t->handle);
+    free(t);
+  }
+  else
+  {
+    starpu_data_unregister(t->handle);
     starpu_free(data);
+    free(t);
+  }
+  
 }
 
 void cudnn_shutdown() 

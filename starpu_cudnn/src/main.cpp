@@ -52,6 +52,12 @@ int main(int argc, char **argv)
   }
 
   auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>("data/mnist/");
+  std::cout << "Nbr of training images = " << dataset.training_images.size() << std::endl;
+  std::cout << "Nbr of training labels = " << dataset.training_labels.size() << std::endl;
+  std::cout << "Nbr of test images = " << dataset.test_images.size() << std::endl;
+  std::cout << "Nbr of test labels = " << dataset.test_labels.size() << std::endl;
+
+  std::cout << "IDK = " << dataset.training_images.at(0).size() << std::endl; //28*28
 
   /* Enable profiling */
   starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
@@ -85,7 +91,7 @@ int main(int argc, char **argv)
     free_tensor(out5);
   }
 
-  free_tensor(filter/*, filt_data*/);
+  free_tensor(filter, filt_data);
   free_tensor(conv1_bias/*, conv1_bias_data*/);
   free_tensor(conv2_bias/*, conv2_bias_data*/);
 
@@ -95,8 +101,6 @@ int main(int argc, char **argv)
 
   return 0;
 }
-
-
 
 void show_result(const tensor *tensor)
 {
@@ -108,3 +112,25 @@ void show_result(const tensor *tensor)
   }
   starpu_data_release(tensor->handle);
 }
+
+
+//	// output = weights^T * input (without biases)
+//	checkCublasErrors(
+//		cublasSgemm(cuda_->cublas(),
+//			CUBLAS_OP_T, CUBLAS_OP_N, 
+//			output_size_, batch_size_, input_size_,
+//			&cuda_->one,  
+//			weights_->cuda(), input_size_, 
+//			input_->cuda(), input_size_,
+//			&cuda_->zero, 
+//			output_->cuda(),  output_size_));
+//
+//	// output += biases * d_one_vec^T
+//	checkCublasErrors(cublasSgemm(cuda_->cublas(),
+//					CUBLAS_OP_N, CUBLAS_OP_N, 
+//					output_size_, batch_size_, 1,
+//					&cuda_->one, 
+//					biases_->cuda(), output_size_, 
+//					d_one_vec, 1, 
+//					&cuda_->one, 
+//					output_->cuda(), output_size_));
