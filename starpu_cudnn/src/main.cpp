@@ -17,6 +17,12 @@ int main(int argc, char **argv)
   const int in_h = atoi(argv[3]);
   const int in_w = atoi(argv[4]);
 
+  const int ret = starpu_init(NULL);
+  if (ret == -ENODEV)
+  {
+    return 77;
+  }
+
   const int in_n = 1, in_c = 1;
   const int in_size = in_n * in_c * in_h * in_w;          
   float *in_data;
@@ -44,12 +50,6 @@ int main(int argc, char **argv)
   conv2_bias_data[0] = 0.0f;
 
   starpu_fxt_autostart_profiling(0);
-
-  const int ret = starpu_init(NULL);
-  if (ret == -ENODEV)
-  {
-    return 77;
-  }
 
   auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>("data/mnist/");
   std::cout << "Nbr of training images = " << dataset.training_images.size() << std::endl;
