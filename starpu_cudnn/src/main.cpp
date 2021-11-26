@@ -1,99 +1,57 @@
 #include "starpu_dnn.hpp"
-#include "../include/cifar-10/cifar10_reader.hpp"
+#include "model_load.hpp"
 #include "../include/mnist-fashion/mnist_reader.hpp"
 
 void show_result(const tensor *);
 
 int main(int argc, char **argv)
 {
-  if(argc != 5)
-  {
-    printf("\nshow_result repeat in_h in_w\n");
-    return -1;
-  }
-
-  const int show = atoi(argv[1]);
-  const int repeat = atoi(argv[2]);
-  const int in_h = atoi(argv[3]);
-  const int in_w = atoi(argv[4]);
-
   const int ret = starpu_init(NULL);
   if (ret == -ENODEV)
   {
     return 77;
   }
-
-  const int in_n = 1, in_c = 1;
-  const int in_size = in_n * in_c * in_h * in_w;          
-  float *in_data;
-  starpu_malloc((void**)&in_data, in_size * sizeof(*in_data));
-  for(int i=0; i<in_size; i++) 
-  {
-    in_data[i] = i;
-  }
-
-  const int filt_k = 1, filt_c = 1, filt_h = 2, filt_w = 2;
-  const int filt_size = filt_k * filt_c * filt_h * filt_w;  
-  float *filt_data;
-  starpu_malloc((void**)&filt_data, filt_size * sizeof(*filt_data));
-  for(int i=0; i<filt_size; i++) 
-  {
-    filt_data[i] = 1.0f;
-  }
-
-  float *conv1_bias_data;
-  starpu_malloc((void**)&conv1_bias_data, 1 * sizeof(*conv1_bias_data));
-  conv1_bias_data[0] = 0.0f;
-
-  float *conv2_bias_data;
-  starpu_malloc((void**)&conv2_bias_data, 1 * sizeof(*conv2_bias_data));
-  conv2_bias_data[0] = 0.0f;
-
   starpu_fxt_autostart_profiling(0);
 
-  auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>("data/mnist/");
-  std::cout << "Nbr of training images = " << dataset.training_images.size() << std::endl;
-  std::cout << "Nbr of training labels = " << dataset.training_labels.size() << std::endl;
-  std::cout << "Nbr of test images = " << dataset.test_images.size() << std::endl;
-  std::cout << "Nbr of test labels = " << dataset.test_labels.size() << std::endl;
+  //auto dataset = mnist::read_dataset<std::vector, std::vector, uint8_t, uint8_t>("data/mnist/");
+  //std::cout << "Nbr of training images = " << dataset.training_images.size() << std::endl;
+  //std::cout << "Nbr of training labels = " << dataset.training_labels.size() << std::endl;
+  //std::cout << "Nbr of test images = " << dataset.test_images.size() << std::endl;
+  //std::cout << "Nbr of test labels = " << dataset.test_labels.size() << std::endl;
+  //std::cout << "IDK = " << dataset.training_images.at(0).size() << std::endl; //28*28 
 
-  std::cout << "IDK = " << dataset.training_images.at(0).size() << std::endl; //28*28
+  //weight & bias linear ReLu 0
+  float *wlinrelu0_data, *blinrelu0_data;
+  tensor *wlinrelu0_tensor = load_tensor("data/model/0", 1, 1, 512, 784, wlinrelu0_data);
+  tensor *blinrelu0_tensor = load_tensor("data/model/1", 1, 1, 512, 1, blinrelu0_data);
+
+  //weight & bias linear ReLu 1
+  float *wlinrelu1_data, *blinrelu1_data;                                                                                                                                                                   
+  tensor *wlinrelu1_tensor = load_tensor("data/model/2", 1, 1, 512, 512, wlinrelu1_data);
+  tensor *blinrelu1_tensor = load_tensor("data/model/3", 1, 1, 512, 1, blinrelu1_data);
+
+  //weight & bias linear ReLu 2
+  float *wlinrelu2_data, *blinrelu2_data;
+  tensor *wlinrelu2_tensor = load_tensor("data/model/4", 1, 1, 10, 512, wlinrelu2_data);
+  tensor *blinrelu2_tensor = load_tensor("data/model/5", 1, 1, 10, 1, blinrelu2_data);
 
   /* Enable profiling */
   starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
 
   starpu_execute_on_each_worker(cudnn_init, cudnn, STARPU_CUDA);
 
-  tensor *filter = init_tensor(filt_data, filt_k, filt_c, filt_h, filt_w);
-  tensor *conv1_bias = init_tensor(conv1_bias_data, 1, 1, 1, 1);
-  tensor *conv2_bias = init_tensor(conv2_bias_data, 1, 1, 1, 1);
-  
-  for(int i=0; i<repeat; i++)
-  {
-    tensor *in = init_tensor(in_data, in_n, in_c, in_h, in_w);
+  // Linear(28*28, 512),
+  //ReLU(),
+  //Linear(512, 512),
+  //ReLU(),
+  //Linear(512, 10)
 
-    tensor *out = submit_convolution2D_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, in, filter, conv1_bias);
-    free_tensor(in);
-    tensor *out2 = submit_convolution2D_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, out, filter, conv2_bias);
-    free_tensor(out);
-    tensor *out3 = submit_max_pooling2D_forward(3, 3, 0, 0, 1, 1, 1.0, 0.0, out2);
-    free_tensor(out2);
-    tensor *out4 = submit_relu_forward(1.0, 1.0, out3);
-    free_tensor(out3);
-    tensor *out5 = submit_softmax_forward(1.0, 1.0, out4);
-    free_tensor(out4);
-
-    if(show && i == repeat - 1)
-    {
-      show_result(out5);
-    }
-
-    free_tensor(out5);
-  }
-
-  free_tensor(filter);
-  free_tensor(conv1_bias);
-  free_tensor(conv2_bias);
+  free_tensor(wlinrelu0_tensor);
+  free_tensor(blinrelu0_tensor);
+  free_tensor(wlinrelu1_tensor);
+  free_tensor(blinrelu1_tensor);
+  free_tensor(wlinrelu2_tensor);
+  free_tensor(blinrelu2_tensor);
 
   cudnn_shutdown();
   starpu_cublas_shutdown();

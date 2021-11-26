@@ -3,7 +3,6 @@
 
 #include <starpu.h>
 #include <starpu_cublas_v2.h>
-#include <iostream>
 
 #include "cudnn.h"
 
