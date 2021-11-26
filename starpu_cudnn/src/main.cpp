@@ -73,7 +73,7 @@ int main(int argc, char **argv)
     tensor *in = init_tensor(in_data, in_n, in_c, in_h, in_w);
 
     tensor *out = submit_convolution2D_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, in, filter, conv1_bias);
-    free_tensor(in, in_data);
+    free_tensor(in);
     tensor *out2 = submit_convolution2D_forward(1, 1, 1, 1, 1, 1, 1.0, 0.0, out, filter, conv2_bias);
     free_tensor(out);
     tensor *out3 = submit_max_pooling2D_forward(3, 3, 0, 0, 1, 1, 1.0, 0.0, out2);
@@ -91,9 +91,9 @@ int main(int argc, char **argv)
     free_tensor(out5);
   }
 
-  free_tensor(filter, filt_data);
-  free_tensor(conv1_bias, conv1_bias_data);
-  free_tensor(conv2_bias, conv2_bias_data);
+  free_tensor(filter);
+  free_tensor(conv1_bias);
+  free_tensor(conv2_bias);
 
   cudnn_shutdown();
   starpu_cublas_shutdown();

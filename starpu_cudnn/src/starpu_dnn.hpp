@@ -13,6 +13,7 @@ cudnnHandle_t cudnn[STARPU_NMAXWORKERS];
 
 struct _tensor 
 {
+  float *data;
   starpu_data_handle_t handle;
   int n, c, h, w;
 };
@@ -20,8 +21,8 @@ typedef struct _tensor tensor;
 
 void cudnn_shutdown();
 void cudnn_init(void *);
-void free_tensor(tensor *, float *);
-tensor *init_tensor(const float *, int, int, int, int);
+void free_tensor(tensor *);
+tensor *init_tensor(float *, int, int, int, int);
 
 // Convolution Forward
 struct convolution2D_forward_params
@@ -151,9 +152,9 @@ void cudnn_init(void *arg)
   cudnnSetStream(cudnn_[id], starpu_cuda_get_local_stream());
 }
 
-void free_tensor(tensor *t, float *data = NULL)
+void free_tensor(tensor *t)
 {
-  if(data==NULL)
+  if(t->data==nullptr)
   {
     starpu_data_unregister_submit(t->handle);
     free(t);
@@ -161,7 +162,7 @@ void free_tensor(tensor *t, float *data = NULL)
   else
   {
     starpu_data_unregister(t->handle);
-    starpu_free(data);
+    starpu_free(t->data);
     free(t);
   }
   
@@ -175,17 +176,18 @@ void cudnn_shutdown()
   }
 }
 
-tensor *init_tensor(const float *data, int n, int c, int h, int w)
+tensor *init_tensor(float *data, int n, int c, int h, int w)
 {
   tensor *out = (tensor *)malloc(sizeof(tensor));
   out->n = n;
   out->c = c;
   out->h = h;
   out->w = w;
+  out->data = data;
 
   if(data != NULL)
     starpu_vector_data_register(&out->handle, STARPU_MAIN_RAM, (uintptr_t)data, n * c * h * w, sizeof(float));
-  else //starpu_data_unregister()
+  else
     starpu_vector_data_register(&out->handle, -1, (uintptr_t) NULL, out->n * out->c * out->h * out->w, sizeof(float));
 
   return out;
@@ -263,7 +265,7 @@ float alpha, float beta, const tensor *in, const tensor *filter, const tensor *b
 {
   const int h = 1 + ( in->h + 2*pad_h - (((filter->h-1)*dil_h)+1) )/u;
   const int w = 1 + ( in->w + 2*pad_w - (((filter->w-1)*dil_w)+1) )/v;
-  tensor *out = init_tensor(NULL, in->n, in->c, h, w);
+  tensor *out = init_tensor(nullptr, in->n, in->c, h, w);
 
   struct convolution2D_forward_params *prms = (struct convolution2D_forward_params *)malloc(sizeof(struct convolution2D_forward_params));
   prms->alpha = alpha;
@@ -338,7 +340,7 @@ tensor *submit_max_pooling2D_forward(int windowHeight, int windowWidth, int vert
 {
   const int h = 1 + (in->h + 2*horizontalPadding - windowHeight)/horizontalStride;
   const int w = 1 + (in->w + 2*verticalPadding - windowWidth)/verticalStride;
-  tensor *out = init_tensor(NULL, in->n, in->c, h, w);
+  tensor *out = init_tensor(nullptr, in->n, in->c, h, w);
 
   struct pooling2D_forward_params *prms = (struct pooling2D_forward_params *)malloc(sizeof(struct pooling2D_forward_params));
   prms->alpha = alpha;
@@ -441,7 +443,7 @@ void softmax_forward(void *buffers[], void *_args)
 
 tensor *submit_softmax_forward(float alpha, float beta, const tensor *in) 
 {
-  tensor *out = init_tensor(NULL, in->n, in->c, in->h, in->w);
+  tensor *out = init_tensor(nullptr, in->n, in->c, in->h, in->w);
 
   struct softmax_forward_params *prms = (struct softmax_forward_params *)malloc(sizeof(struct softmax_forward_params));
   prms->alpha = alpha;
@@ -495,7 +497,7 @@ void fullyco_forward(void *buffers[], void *_args)
 
 tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in, const tensor *bias)
 {
-  tensor *out = init_tensor(NULL, in->n, in->c, 1, bias->w);
+  tensor *out = init_tensor(nullptr, in->n, in->c, 1, bias->w);
 
   struct fullyco_forward_params *prms = (struct fullyco_forward_params *)malloc(sizeof(struct fullyco_forward_params));
   prms->alpha = alpha;
