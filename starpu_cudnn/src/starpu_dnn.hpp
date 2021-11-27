@@ -18,6 +18,8 @@ struct _tensor
 };
 typedef struct _tensor tensor;
 
+int starpu_dnn_init();
+void starpu_dnn_shutdown();
 void cudnn_shutdown();
 void cudnn_init(void *);
 void free_tensor(tensor *);
@@ -143,6 +145,26 @@ static struct starpu_codelet fullyco_forward_cl =
 
 
 //------- Initialize --------
+int starpu_dnn_init()
+{
+  const int ret = starpu_init(NULL);
+  if (ret == -ENODEV)
+  {
+      return 77;
+  }
+  starpu_execute_on_each_worker(cudnn_init, cudnn, STARPU_CUDA);
+  starpu_cublas_init();
+
+  return 0;
+}
+
+void starpu_dnn_shutdown()
+{
+  cudnn_shutdown();
+  starpu_cublas_shutdown();
+  starpu_shutdown();
+}
+
 void cudnn_init(void *arg) 
 {
   cudnnHandle_t *cudnn_ = (cudnnHandle_t *) arg;
