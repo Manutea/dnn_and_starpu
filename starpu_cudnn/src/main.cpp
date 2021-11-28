@@ -43,13 +43,16 @@ int main(int argc, char **argv)
   tensor *wlinrelu2_tensor = load_tensor("data/model/4", 1, 1, 10, 512, wlinrelu2_data);
   tensor *blinrelu2_tensor = load_tensor("data/model/5", 1, 1, 10, 1, blinrelu2_data);
 
+  //Dnn model
+  tensor *out0 = submit_linear_forward(whoaim, wlinrelu0_tensor, blinrelu0_tensor);
+  free_tensor(whoaim);
   //Linear(28*28, 512),
   //ReLU(),
   //Linear(512, 512),
   //ReLU(),
   //Linear(512, 10)
 
-  free_tensor(whoaim);
+  free_tensor(out0);
   free_tensor(wlinrelu0_tensor);
   free_tensor(blinrelu0_tensor);
   free_tensor(wlinrelu1_tensor);
@@ -72,25 +75,3 @@ void show_result(const tensor *tensor)
   }
   starpu_data_release(tensor->handle);
 }
-
-
-//	// output = weights^T * input (without biases)
-//	checkCublasErrors(
-//		cublasSgemm(cuda_->cublas(),
-//			CUBLAS_OP_T, CUBLAS_OP_N, 
-//			output_size_, batch_size_, input_size_,
-//			&cuda_->one,  
-//			weights_->cuda(), input_size_, 
-//			input_->cuda(), input_size_,
-//			&cuda_->zero, 
-//			output_->cuda(),  output_size_));
-//
-//	// output += biases * d_one_vec^T
-//	checkCublasErrors(cublasSgemm(cuda_->cublas(),
-//					CUBLAS_OP_N, CUBLAS_OP_N, 
-//					output_size_, batch_size_, 1,
-//					&cuda_->one, 
-//					biases_->cuda(), output_size_, 
-//					d_one_vec, 1, 
-//					&cuda_->one, 
-//					output_->cuda(), output_size_));

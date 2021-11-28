@@ -128,7 +128,7 @@ struct fullyco_forward_params
   int bias_h, bias_w;
 };
 void fullyco_forward(void **, void *);
-tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in, const tensor *bias);
+tensor *submit_fullyco_forward(float, float, const tensor *, const tensor *);
 static struct starpu_perfmodel fullyco_forward_model =
 {
   .type = STARPU_HISTORY_BASED,
@@ -141,6 +141,30 @@ static struct starpu_codelet fullyco_forward_cl =
   .nbuffers = 2,
   .modes = {STARPU_R, STARPU_R, STARPU_W},
   .model = &fullyco_forward_model,
+};
+
+//
+struct linear_forward_params
+{                                                                                                                                                                                
+  float alpha_w, beta_w, alpha_b, beta_b;  
+  int in_n, in_c, in_h, in_w;
+  int weight_n, weight_c, weight_h, weight_w;
+  int bias_h, bias_w;
+};
+void linear_forward(void **, void *);
+tensor *submit_linear_forward(const tensor *, const tensor *, float, float, const tensor *, float, float);
+static struct starpu_perfmodel linear_forward_model =
+{
+  .type = STARPU_HISTORY_BASED,
+  .symbol = "linear_forward_model"
+};
+static struct starpu_codelet linear_forward_cl = 
+{
+  .cuda_funcs = {linear_forward},
+  .cuda_flags = {STARPU_CUDA_ASYNC},
+  .nbuffers = 4,
+  .modes = {STARPU_R, STARPU_R, STARPU_R, STARPU_W},
+  .model = &linear_forward_model,
 };
 
 
@@ -545,4 +569,80 @@ tensor *submit_fullyco_forward(float alpha, float beta, const tensor *in, const 
   return out;
 }
 
-#endif
+//------- Linear -------- 
+void linear_forward(void* buffers[], void* _args)
+{
+  const float *in_data     = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
+  const float *weight_data = (float *)STARPU_VECTOR_GET_PTR(buffers[1]);
+  const float *bias_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[2]);
+  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[3]);
+  const struct linear_forward_params *prms = (struct linear_forward_params *)_args;
+
+  starpu_cublas_set_stream(); 
+  cublasHandle_t cublasHandle = starpu_cublas_get_local_handle();
+
+  const int input_size = prms->in_h * prms->in_w;
+  const int output_size = prms->weight_h * prms->in_n;
+  //output = weights^T * input (without biases)
+  cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
+	      output_size,                        //nb row Weight and Out
+	      prms->in_n,                         //nb col In and Out
+	      input_size,                         //nb col Weight and row of In
+	      &prms->alpha_w,                     //Must be 1
+	      weight_data,                        //Weight data
+	      input_size,                         //Leading dimension of two-dimensional array used to store the matrix Weight
+	      in_data,                            //In data
+	      input_size,                         //Leading dimension of two-dimensional array used to store the matrix In
+	      &prms->beta_w,                      //Must be 0
+	      out_data,                           //Out data
+	      output_size);                       //Leading dimension of a two-dimensional array used to store the matrix Out
+
+  // output += biases * d_one_vec^T
+
+}
+
+tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tensor *bias, float alpha_w=1.0f, float beta_w=0.0f, float alpha_b=1.0f, float beta_b = 1.0f)
+{
+  tensor *out = init_tensor(nullptr, in->n, in->c, bias->h, bias->w);
+  struct linear_forward_params *prms = (struct linear_forward_params *)malloc(sizeof(struct linear_forward_params));
+  prms->alpha_w = alpha_w;
+  prms->beta_w = beta_w;
+  prms->alpha_b = alpha_b;
+  prms->beta_b = beta_b;
+  prms->in_n = in->n;
+  prms->in_c = in->c;
+  prms->in_h = in->h;
+  prms->in_w = in->w;
+  prms->weight_n = weight->n;
+  prms->weight_c = weight->c;
+  prms->weight_h = weight->h;
+  prms->weight_w = weight->w;
+  prms->bias_h = bias->h;
+  prms->bias_w = bias->w;
+
+  struct starpu_task *task = starpu_task_create();
+  task->cl = &softmax_forward_cl;
+  task->handles[0] = in->handle;
+  task->handles[1] = weight->handle;
+  task->handles[2] = bias->handle;
+  task->handles[3] = out->handle;
+  task->cl_arg = prms;
+  task->cl_arg_size = sizeof(struct fullyco_forward_params);
+  task->cl_arg_free = 1;
+
+  const int ret = starpu_task_submit(task);
+  STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
+
+  return out;
+}
+
+#endif                                                                                                                                                                             
+//      // output += biases * d_one_vec^T                                                                                                                                                                 
+//              cublasSgemm(cuda_->cublas(),                                                                                                                                                              
+//                      CUBLAS_OP_N, CUBLAS_OP_N,                                                                                                                                                         
+//                      output_size_, batch_size_, 1,                                                                                                                                                     
+//                      &cuda_->one,                                                                                                                                                                      
+//                      biases_->cuda(), output_size_,                                                                                                                                                    
+//                      d_one_vec, 1,                                                                                                                                                                     
+//                      &cuda_->one,                                                                                                                                                                     
+//                      output_->cuda(), output_size_));  
