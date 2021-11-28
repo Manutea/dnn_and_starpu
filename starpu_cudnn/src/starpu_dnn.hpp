@@ -143,7 +143,7 @@ static struct starpu_codelet fullyco_forward_cl =
   .model = &fullyco_forward_model,
 };
 
-//
+//------- Linear ------
 struct linear_forward_params
 {                                                                                                                                                                                
   float alpha_w, beta_w, alpha_b, beta_b;  

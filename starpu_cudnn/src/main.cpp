@@ -34,7 +34,7 @@ int main(int argc, char **argv)
   tensor *blinrelu0_tensor = load_tensor("data/model/1", 1, 1, 512, 1, blinrelu0_data);
 
   //weight & bias linear ReLu 1
-  float *wlinrelu1_data, *blinrelu1_data;                                                                                                                                                                   
+  float *wlinrelu1_data, *blinrelu1_data;  
   tensor *wlinrelu1_tensor = load_tensor("data/model/2", 1, 1, 512, 512, wlinrelu1_data);
   tensor *blinrelu1_tensor = load_tensor("data/model/3", 1, 1, 512, 1, blinrelu1_data);
 
@@ -44,15 +44,23 @@ int main(int argc, char **argv)
   tensor *blinrelu2_tensor = load_tensor("data/model/5", 1, 1, 10, 1, blinrelu2_data);
 
   //Dnn model
+  //Linear(28*28, 512)
   tensor *out0 = submit_linear_forward(whoaim, wlinrelu0_tensor, blinrelu0_tensor);
   free_tensor(whoaim);
-  //Linear(28*28, 512),
-  //ReLU(),
-  //Linear(512, 512),
-  //ReLU(),
-  //Linear(512, 10)
-
+  tensor *out1 = submit_relu_forward(1.0f, 1.0f, out0);
   free_tensor(out0);
+  //Linear(512, 512)
+  tensor *out2 = submit_linear_forward(out1, wlinrelu1_tensor, blinrelu1_tensor);
+  free_tensor(out1);
+  tensor *out3 = submit_relu_forward(1.0f, 1.0f, out2);
+  free_tensor(out2); 
+  //Linear(512, 10)
+  tensor *out4 = submit_linear_forward(out3, wlinrelu2_tensor, blinrelu2_tensor); 
+  free_tensor(out3);
+  tensor *out5 = submit_relu_forward(1.0f, 1.0f, out4);
+  free_tensor(out4);
+
+  free_tensor(out5);
   free_tensor(wlinrelu0_tensor);
   free_tensor(blinrelu0_tensor);
   free_tensor(wlinrelu1_tensor);
