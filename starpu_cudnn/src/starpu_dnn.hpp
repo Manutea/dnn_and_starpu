@@ -162,8 +162,8 @@ static struct starpu_codelet linear_forward_cl =
 {
   .cuda_funcs = {linear_forward},
   .cuda_flags = {STARPU_CUDA_ASYNC},
-  .nbuffers = 4,
-  .modes = {STARPU_R, STARPU_R, STARPU_R, STARPU_W},
+  .nbuffers = 5,
+  .modes = {STARPU_R, STARPU_R, STARPU_R, STARPU_R, STARPU_W},
   .model = &linear_forward_model,
 };
 
@@ -575,7 +575,8 @@ void linear_forward(void* buffers[], void* _args)
   const float *in_data     = (float *)STARPU_VECTOR_GET_PTR(buffers[0]);
   const float *weight_data = (float *)STARPU_VECTOR_GET_PTR(buffers[1]);
   const float *bias_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[2]);
-  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[3]);
+  const float *one_vec_data = (float *)STARPU_VECTOR_GET_PTR(buffers[3]); 
+  float *out_data   = (float *)STARPU_VECTOR_GET_PTR(buffers[4]);
   const struct linear_forward_params *prms = (struct linear_forward_params *)_args;
 
   starpu_cublas_set_stream(); 
@@ -598,12 +599,30 @@ void linear_forward(void* buffers[], void* _args)
 	      output_size);                       //Leading dimension of a two-dimensional array used to store the matrix Out
 
   // output += biases * d_one_vec^T
-
+  cublasSgemm(cublasHandle, CUBLAS_OP_N, CUBLAS_OP_N,
+	      output_size,                        //nb row Bias and Out 
+              prms->in_n,                         //nb col One_vec and Out 
+	      1,                                  //nb col Weight and row of One_vec
+              &prms->alpha_b,                     //Must be 1
+	      bias_data,                          //Bias data
+              output_size,                        //Leading dimension of two-dimensional array used to store the matrix Bias
+              one_vec_data,                       //One_vec data
+	      1,                                  //Leading dimension of two-dimensional array used to store the matrix One_vec
+              &prms->beta_b,                      //Must be 1
+              out_data,                           //Out data
+              output_size);                       //Leading dimension of a two-dimensional array used to store the matrix Out
 }
 
 tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tensor *bias, float alpha_w=1.0f, float beta_w=0.0f, float alpha_b=1.0f, float beta_b = 1.0f)
 {
   tensor *out = init_tensor(nullptr, in->n, in->c, bias->h, bias->w);
+
+  float *one_vec_data;
+  starpu_malloc((void **)&one_vec_data, in->n*sizeof(float));
+  for(int i=0; i<in->n; i++)
+    one_vec_data[i] = 1.0f;
+  tensor *one_vec = init_tensor(one_vec_data, in->n, 1, 1, 1);
+
   struct linear_forward_params *prms = (struct linear_forward_params *)malloc(sizeof(struct linear_forward_params));
   prms->alpha_w = alpha_w;
   prms->beta_w = beta_w;
@@ -625,10 +644,15 @@ tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tens
   task->handles[0] = in->handle;
   task->handles[1] = weight->handle;
   task->handles[2] = bias->handle;
-  task->handles[3] = out->handle;
+  task->handles[3] = one_vec->handle;
+  task->handles[4] = out->handle;
   task->cl_arg = prms;
   task->cl_arg_size = sizeof(struct fullyco_forward_params);
   task->cl_arg_free = 1;
+
+  //This sad :(, Put the One_vec alloc somewhere else
+  starpu_task_wait_for_all();
+  free_tensor(one_vec);
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
@@ -636,13 +660,4 @@ tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tens
   return out;
 }
 
-#endif                                                                                                                                                                             
-//      // output += biases * d_one_vec^T                                                                                                                                                                 
-//              cublasSgemm(cuda_->cublas(),                                                                                                                                                              
-//                      CUBLAS_OP_N, CUBLAS_OP_N,                                                                                                                                                         
-//                      output_size_, batch_size_, 1,                                                                                                                                                     
-//                      &cuda_->one,                                                                                                                                                                      
-//                      biases_->cuda(), output_size_,                                                                                                                                                    
-//                      d_one_vec, 1,                                                                                                                                                                     
-//                      &cuda_->one,                                                                                                                                                                     
-//                      output_->cuda(), output_size_));  
+#endif
