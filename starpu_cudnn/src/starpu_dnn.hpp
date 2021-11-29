@@ -640,7 +640,7 @@ tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tens
   prms->bias_w = bias->w;
 
   struct starpu_task *task = starpu_task_create();
-  task->cl = &softmax_forward_cl;
+  task->cl = &linear_forward_cl;
   task->handles[0] = in->handle;
   task->handles[1] = weight->handle;
   task->handles[2] = bias->handle;
@@ -651,8 +651,8 @@ tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tens
   task->cl_arg_free = 1;
 
   //This sad :(, Put the One_vec alloc somewhere else
-  starpu_task_wait_for_all();
-  free_tensor(one_vec);
+  //starpu_task_wait_for_all();
+  //free_tensor(one_vec);
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
