@@ -1,5 +1,5 @@
-#include "starpu_dnn.hpp"
-#include "model_load.hpp"
+#include "../include/starpu_dnn/starpu_dnn.hpp"
+#include "../include/starpu_dnn/model_load.hpp"
 #include "../include/mnist-fashion/mnist_reader.hpp"
 
 void show(const tensor *);
@@ -17,15 +17,14 @@ int main(int argc, char **argv)
   starpu_profiling_status_set(STARPU_PROFILING_ENABLE);
 
   //Image inference
-  float *whoaim_data;
-  starpu_malloc((void **)&whoaim_data, 28*28*sizeof(float)); //TODO : Move starpu_malloc inside tensor_init()
+  std::vector<float> whoaim_vec(28*28);
   for(int i=0; i<28*28; i++)
   {
     float f =  (float)unsigned(dataset.test_images.at(itest).at(i));
     //Because Pytorch Fashion Model scale the pixels values [0, 255] to [0.0, 1.0]
-    whoaim_data[i] = (1.0/255.0)*f;
+    whoaim_vec[i] = (1.0/255.0)*f;
   }
-  tensor *whoaim = init_tensor(whoaim_data, 1, 1, 28, 28);
+  tensor *whoaim = init_tensor(whoaim_vec.data(), 1, 1, 28, 28);
 
   //weight & bias linear ReLu 0
   float *wlinrelu0_data, *blinrelu0_data;
