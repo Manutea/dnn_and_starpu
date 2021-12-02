@@ -52,28 +52,28 @@ tensor *init_tensor(float *data, int n, int c, int h, int w)
 
   if(data != nullptr)
   {
-    //starpu_malloc((void **)&data, n * c * h * w * sizeof(float));
     starpu_memory_pin(data, n * c * h * w * sizeof(data[0]));
     starpu_vector_data_register(&out->handle, STARPU_MAIN_RAM, (uintptr_t)data, n * c * h * w, sizeof(float));
   }
   else
+  {
     starpu_vector_data_register(&out->handle, -1, (uintptr_t) NULL, out->n * out->c * out->h * out->w, sizeof(float));
+  }
 
   return out;
 }
 
 void free_tensor(tensor *t)
 {
-  if(t->data == nullptr)
+  if(t->data != nullptr)
   {
-    starpu_data_unregister_submit(t->handle);
+    starpu_data_unregister(t->handle);
+    starpu_memory_unpin(t->data, t->n * t->c * t->h * t->w * sizeof(float));
     free(t);
   }
   else
   {
-    starpu_data_unregister(t->handle);
-    //starpu_free(t->data);
-    starpu_memory_unpin(t->data, t->n * t->c * t->h * t->w * sizeof(float));
+    starpu_data_unregister_submit(t->handle);   
     free(t);
   }
   
@@ -565,8 +565,8 @@ void linear_forward(void* buffers[], void* _args)
   starpu_cublas_set_stream(); 
   cublasHandle_t cublasHandle = starpu_cublas_get_local_handle();
 
-  const int input_size = prms->in_h * prms->in_w;
-  const int output_size = prms->weight_h * prms->in_n;
+  const int input_size = prms->in_c * prms->in_h * prms->in_w;
+  const int output_size = prms->weight_h;
   //output = weights^T * input (without biases)
   cublasSgemm(cublasHandle, CUBLAS_OP_T, CUBLAS_OP_N,
 	      output_size,                        //nb row Weight and Out
@@ -600,6 +600,7 @@ tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tens
 {
   tensor *out = init_tensor(nullptr, in->n, in->c, bias->h, bias->w);
 
+  //Move this in the init
   float *one_vec_data;
   starpu_malloc((void **)&one_vec_data, in->n*sizeof(float));
   for(int i=0; i<in->n; i++)
@@ -630,12 +631,8 @@ tensor *submit_linear_forward(const tensor *in, const tensor *weight, const tens
   task->handles[3] = one_vec->handle;
   task->handles[4] = out->handle;
   task->cl_arg = prms;
-  task->cl_arg_size = sizeof(struct fullyco_forward_params);
+  task->cl_arg_size = sizeof(struct linear_forward_params);
   task->cl_arg_free = 1;
-
-  //This sad :(, Put the One_vec alloc somewhere else
-  //starpu_task_wait_for_all();
-  //free_tensor(one_vec);
 
   const int ret = starpu_task_submit(task);
   STARPU_CHECK_RETURN_VALUE(ret, "starpu_task_submit");
