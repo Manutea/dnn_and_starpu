@@ -1,4 +1,4 @@
-CFLAGS  += $(shell pkg-config --cflags starpu-1.3) -I${CUDNN_INSTALL_PATH}/include
+CFLAGS  += $(shell pkg-config --cflags starpu-1.3) -I${CUDNN_INSTALL_PATH}/include -I${MKLROOT}/include
 LDLIBS  += $(shell pkg-config --libs starpu-1.3)
 CC      = gcc
 

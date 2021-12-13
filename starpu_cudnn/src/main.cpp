@@ -7,7 +7,6 @@
 
 int main(int argc, char **argv)
 {
-
   if(argc < 2)
   {
     std::cout << "[batch size]";
@@ -66,7 +65,8 @@ int main(int argc, char **argv)
   free_tensor(blinrelu1_tensor);
   free_tensor(out1);
   tensor *out3 = submit_relu_forward(1.0f, 1.0f, out2);
-  free_tensor(out2);                                                                                                                                                                                       
+  free_tensor(out2);
+ 
   //Linear(512, 10)
   tensor *out4 = submit_linear_forward(out3, wlinrelu2_tensor, blinrelu2_tensor); 
   free_tensor(wlinrelu2_tensor);
@@ -81,8 +81,8 @@ int main(int argc, char **argv)
   for(int ibatch=0; ibatch<batch; ibatch++)
   {
     int chosen = ibatch*10;
-    std::cout << "----"<< ibatch <<"-----\n" << std::endl; 
-    std::cout << "[" << 0 << "] = " << scores[ibatch*10] << "\n";
+    //std::cout << "----"<< ibatch <<"-----\n" << std::endl; 
+    //std::cout << "[" << 0 << "] = " << scores[ibatch*10] << "\n";
     for(int i=ibatch*10+1; i<10+(ibatch*10); i++)
     {
       std::cout << "[" << i - (ibatch * 10) << "] = " << scores[i] << "\n";
@@ -91,8 +91,8 @@ int main(int argc, char **argv)
 	chosen = i;
       }
     }
-    std::cout << "\nImage label to guess is : " << unsigned(dataset.test_labels.at(ibatch)) << std::endl;  
-    std::cout << "The found label is : " << chosen - (ibatch * 10)<< "\n" << std::endl;
+    ///std::cout << "\nImage label to guess is : " << unsigned(dataset.test_labels.at(ibatch)) << std::endl;  
+    // std::cout << "The found label is : " << chosen - (ibatch * 10)<< "\n" << std::endl;
   }
 
   free_tensor(out5);
